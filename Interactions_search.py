@@ -648,14 +648,14 @@ def validate_inputs(receptor_pdb, ligand_pdb, chain):
     pdbs_in_cwd = sorted(p.name for p in cwd.glob('*.pdb'))
 
     if not Path(receptor_pdb).exists():
-        errors.append(f"Receptor no encontrado: {receptor_pdb}")
-        errors.append(f"  Directorio actual : {cwd}")
-        errors.append(f"  PDB disponibles   : {pdbs_in_cwd or '(ninguno)'}")
+        errors.append(f"Receptor not found: {receptor_pdb}")
+        errors.append(f"  Current directory : {cwd}")
+        errors.append(f"  Available PDBs    : {pdbs_in_cwd or '(none)'}")
         return errors
     if not Path(ligand_pdb).exists():
-        errors.append(f"Ligando no encontrado: {ligand_pdb}")
-        errors.append(f"  Directorio actual : {cwd}")
-        errors.append(f"  PDB disponibles   : {pdbs_in_cwd or '(ninguno)'}")
+        errors.append(f"Ligand not found: {ligand_pdb}")
+        errors.append(f"  Current directory : {cwd}")
+        errors.append(f"  Available PDBs    : {pdbs_in_cwd or '(none)'}")
         return errors
     chains_found, has_atoms = set(), False
     with open(receptor_pdb) as f:
@@ -664,12 +664,12 @@ def validate_inputs(receptor_pdb, ligand_pdb, chain):
                 chains_found.add(line[21])
                 has_atoms = True
     if not has_atoms:
-        errors.append(f"El receptor no tiene registros ATOM: {receptor_pdb}")
+        errors.append(f"Receptor has no ATOM records: {receptor_pdb}")
     elif chain not in chains_found:
-        errors.append(f"Cadena '{chain}' no encontrada. Disponibles: {sorted(chains_found)}")
+        errors.append(f"Chain '{chain}' not found. Available: {sorted(chains_found)}")
     lig_atoms = sum(1 for line in open(ligand_pdb) if line.startswith(('ATOM', 'HETATM')))
     if lig_atoms == 0:
-        errors.append(f"El ligando no tiene átomos: {ligand_pdb}")
+        errors.append(f"Ligand has no atoms: {ligand_pdb}")
     return errors
 
 
@@ -794,12 +794,12 @@ def search_pi_cation(DF_Active_Site, aromatic_lig_df):
 # ──────────────────────────────────────────────────────────────────────────────
 
 _TYPE_LABELS = {
-    'acceptor':    'H-bond lig→aceptor',
-    'donor':       'H-bond lig→dador',
-    'aromatic':    'Aromática',
-    'hydrophobic': 'Hidrofóbica',
-    'salt_bridge': 'Puente salino',
-    'pi_cation':   'π-catión',
+    'acceptor':    'H-bond lig→acceptor',
+    'donor':       'H-bond lig→donor',
+    'aromatic':    'Aromatic',
+    'hydrophobic': 'Hydrophobic',
+    'salt_bridge': 'Salt bridge',
+    'pi_cation':   'π-cation',
 }
 
 
@@ -807,15 +807,15 @@ def print_summary(receptor, ligand, DF_validated):
     bar = '═' * 76
     print(f'\n{bar}')
     print(f'  Receptor : {Path(receptor).stem}')
-    print(f'  Ligando  : {Path(ligand).stem}')
-    print(f'  Interacciones validadas : {len(DF_validated)}')
+    print(f'  Ligand   : {Path(ligand).stem}')
+    print(f'  Validated interactions  : {len(DF_validated)}')
     if DF_validated.empty:
-        print('  (ninguna)')
+        print('  (none)')
     else:
         for t, n in DF_validated['Type'].value_counts().items():
             print(f'    {_TYPE_LABELS.get(t, t):<22}: {n}')
         print(f'  {"─"*74}')
-        print(f'  {"Tipo":<22} {"Residuo":>9}  {"Átomo":<6} {"Dist":>6}  {"Ángulo":>7}  {"Lig"}')
+        print(f'  {"Type":<22} {"Residue":>9}  {"Atom":<6} {"Dist":>6}  {"Angle":>7}  {"Lig"}')
         print(f'  {"─"*22} {"─"*9}  {"─"*6} {"─"*6}  {"─"*7}  {"─"*18}')
         for _, row in DF_validated.iterrows():
             label   = _TYPE_LABELS.get(row['Type'], row['Type'])
@@ -859,7 +859,7 @@ def analyze_pair(receptor_pdb, Ligand_imput, chain_receptor, cfg):
     # ── Ligando: hot-points ───────────────────────────────────────
     mol = Chem.MolFromPDBFile(Ligand_imput, removeHs=False)
     if mol is None:
-        print(f"  [WARN] RDKit no pudo leer el ligando: {Ligand_imput}")
+        print(f"  [WARN] RDKit could not read ligand: {Ligand_imput}")
         return
 
     pdb_coords, CM = extract_coords_from_pdb(Ligand_imput)
@@ -1045,27 +1045,27 @@ if __name__ == '__main__':
     tmp_dir  = None   # directorio temporal para --complex, se borra al final
 
     if args.complex_pdb:
-        print(f"\n[Split] Separando: {args.complex_pdb}")
+        print(f"\n[Split] Splitting: {args.complex_pdb}")
         tmp_dir = tempfile.mkdtemp(prefix='interactions_split_')
         protein_path, het_paths = split_pdb(args.complex_pdb, output_dir=tmp_dir)
-        print(f"  Proteina -> {protein_path}")
+        print(f"  Protein  -> {protein_path}")
         if not het_paths:
-            print("  Sin HETATM encontrados (excluyendo agua).")
+            print("  No HETATM groups found (water excluded).")
             shutil.rmtree(tmp_dir, ignore_errors=True)
             sys.exit(1)
         print(f"  HETATM   -> {list(het_paths.keys())}")
         if args.lig_name:
             if args.lig_name not in het_paths:
-                print(f"  Error: '{args.lig_name}' no encontrado. Disponibles: {list(het_paths.keys())}")
+                print(f"  Error: '{args.lig_name}' not found. Available: {list(het_paths.keys())}")
                 shutil.rmtree(tmp_dir, ignore_errors=True)
                 sys.exit(1)
             pairs = [(str(protein_path), str(het_paths[args.lig_name]))]
         elif len(het_paths) == 1:
             resname, lig_path = next(iter(het_paths.items()))
-            print(f"  Seleccionado: {resname}")
+            print(f"  Selected: {resname}")
             pairs = [(str(protein_path), str(lig_path))]
         else:
-            print(f"  Multiples HETATM. Usa -n para elegir: {list(het_paths.keys())}")
+            print(f"  Multiple HETATM groups. Use -n to select: {list(het_paths.keys())}")
             shutil.rmtree(tmp_dir, ignore_errors=True)
             sys.exit(1)
     else:
@@ -1095,14 +1095,14 @@ if __name__ == '__main__':
     for receptor_pdb, Ligand_imput in pairs:
         print(f"\n{'─'*60}")
         print(f"  Receptor : {receptor_pdb}")
-        print(f"  Ligando  : {Ligand_imput}")
-        print(f"  Cadena   : {args.chain_receptor}")
+        print(f"  Ligand   : {Ligand_imput}")
+        print(f"  Chain    : {args.chain_receptor}")
         print(f"{'─'*60}")
         errors = validate_inputs(receptor_pdb, Ligand_imput, args.chain_receptor)
         if errors:
             for e in errors:
                 print(f"  [ERROR] {e}")
-            print("  Saltando este par.")
+            print("  Skipping this pair.")
             n_skip += 1
             continue
         analyze_pair(receptor_pdb, Ligand_imput, args.chain_receptor, cfg)
@@ -1112,6 +1112,6 @@ if __name__ == '__main__':
     if tmp_dir:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
-    print(f"\nAnálisis completado: {n_ok} par(es) procesados, {n_skip} saltados.")
+    print(f"\nAnalysis complete: {n_ok} pair(s) processed, {n_skip} skipped.")
 
     
