@@ -1,20 +1,20 @@
 # Interactions Search
 
-Detecta y clasifica interacciones no covalentes entre un ligando y una proteína a partir de archivos PDB. Identifica puentes de hidrógeno, interacciones aromáticas (π-π y T-shaped) e interacciones hidrofóbicas, valida cada contacto por distancia y ángulo, y genera salidas en CSV y scripts TCL para visualización en VMD.
+Detects and classifies non-covalent interactions between a ligand and a protein from PDB files. Identifies hydrogen bonds, aromatic interactions (π-π and T-shaped), hydrophobic contacts, salt bridges, and π-cation interactions. Each contact is validated by distance and angle criteria. Outputs CSV files and TCL scripts for visualization in VMD.
 
 ---
 
-## Archivos
+## Files
 
-| Archivo | Descripción |
+| File | Description |
 |---|---|
-| `Interactions_search.py` | Script principal |
-| `Interacciones_variables.yml` | Parámetros de distancia, aceptores y dadores por residuo |
-| `Geometry.py` | Módulo auxiliar de geometría (referencia, no se importa directamente) |
+| `Interactions_search.py` | Main script |
+| `Interacciones_variables.yml` | Distance thresholds, acceptors and donors per residue |
+| `Geometry.py` | Auxiliary geometry module (reference only, not imported directly) |
 
 ---
 
-## Dependencias
+## Dependencies
 
 ```
 biopython
@@ -26,244 +26,246 @@ pyyaml
 
 ---
 
-## Uso
+## Usage
 
-### Modo 1 — PDB separados
-
-```bash
-python Interactions_search.py -r proteina.pdb -l ligando.pdb -c A
-```
-
-### Modo 2 — Batch (múltiples ligandos, un receptor)
+### Mode 1 — Separate PDB files
 
 ```bash
-python Interactions_search.py -r proteina.pdb -l lig1.pdb lig2.pdb lig3.pdb -c A
+python Interactions_search.py -r protein.pdb -l ligand.pdb -c A
 ```
 
-Cada par genera su propia carpeta de salida. Los CSV acumulativos (`Interactions_close.csv`, `CM_all.csv`) se appendean automáticamente.
-
-### Modo 3 — PDB complejo
-
-Se tiene un solo PDB con proteína + ligando(s). El script lo separa automáticamente.
+### Mode 2 — Batch (multiple ligands, one receptor)
 
 ```bash
-# Un solo HETATM (se selecciona automáticamente)
-python Interactions_search.py -x complejo.pdb -c A
-
-# Varios HETATM (se elige con -n)
-python Interactions_search.py -x complejo.pdb -c A -n LIG
+python Interactions_search.py -r protein.pdb -l lig1.pdb lig2.pdb lig3.pdb -c A
 ```
 
-Si hay múltiples grupos HETATM y no se usa `-n`, el script lista los disponibles y sale sin analizar.
+Each pair generates its own output folder. Cumulative CSVs (`Interactions_close.csv`, `CM_all.csv`) are appended automatically.
 
-### Argumentos
+### Mode 3 — Complex PDB
 
-| Argumento | Descripción |
+A single PDB containing protein + ligand(s). The script splits it automatically.
+
+```bash
+# Single HETATM group (selected automatically)
+python Interactions_search.py -x complex.pdb -c A
+
+# Multiple HETATM groups (select with -n)
+python Interactions_search.py -x complex.pdb -c A -n LIG
+```
+
+If multiple HETATM groups are present and `-n` is not specified, the script lists the available names and exits without analysing.
+
+### Arguments
+
+| Argument | Description |
 |---|---|
-| `-x / --complex` | PDB complejo. Alternativo a `-r`. |
-| `-r / --receptor_pdb` | PDB del receptor ya separado. |
-| `-l / --ligand_input` | PDB(s) del ligando. Acepta uno o varios (batch). |
-| `-c / --chain_receptor` | Cadena de la proteína (ej: `A`). |
-| `-n / --lig_name` | Nombre del HETATM cuando hay varios en `--complex`. |
+| `-x / --complex` | Complex PDB. Alternative to `-r`. |
+| `-r / --receptor_pdb` | Receptor PDB (already separated). |
+| `-l / --ligand_input` | Ligand PDB(s). Accepts one or several (batch). |
+| `-c / --chain_receptor` | Protein chain (e.g. `A`). |
+| `-n / --lig_name` | HETATM name when multiple groups exist in `--complex`. |
 
 ---
 
-## Pipeline de análisis
+## Analysis Pipeline
 
 ```
-PDB complejo (opcional)
+Complex PDB (optional)
         │
         ▼
 [1] split_pdb()
-    ├── <stem>_protein.pdb      ← registros ATOM
-    └── <stem>_RESNAME.pdb      ← registros HETATM por residuo (sin agua)
+    ├── <stem>_protein.pdb      ← ATOM records
+    └── <stem>_RESNAME.pdb      ← HETATM records per residue (water excluded)
         │
         ▼
-[2] Limpieza del ligando
-    └── remove_bias()           ← elimina átomos CM del PDB del ligando
+[2] Ligand cleanup
+    └── remove_bias()           ← removes CM atoms from ligand PDB
         │
         ▼
-[3] Hot-points del ligando  (RDKit + SMARTS)
-    ├── Aceptores de H-bond:  [O;H1], [O;H0], [N;H1], [N;H0], [n], [o], [N+]
-    ├── Dadores de H-bond:    [O;H], [N;H2], [N;H], [S;H], [nH]
-    └── Anillos aromáticos:   detección por ring_info, filtro por tamaño > 5
+[3] Ligand hot-points  (RDKit + SMARTS)
+    ├── H-bond acceptors:  [O;H1], [O;H0], [N;H1], [N;H0], [n], [o], [N+]
+    ├── H-bond donors:     [O;H], [N;H2], [N;H], [S;H], [nH]
+    └── Aromatic rings:    detected via ring_info, filtered by size > 5
         │
         ▼
-[4] Sitio activo del receptor  (BioPython)
+[4] Receptor active site  (BioPython)
     └── active_site_residues()
-        Residuos cuyo centro de masa está a menos de 12 Å del CM del ligando
-        Se excluyen HOH y el propio ligando
+        Residues whose centre of mass is within 12 Å of the ligand CM
+        HOH and the ligand itself are excluded
         │
         ▼
-[5] Puntos de interés del receptor
+[5] Receptor points of interest
     └── Coordenadas_interes_receptor()
-        ├── Aceptores del receptor  (según tabla en YAML)
-        ├── Dadores del receptor    (según tabla en YAML)
-        └── Centros de anillos aromáticos (TYR, PHE, TRP)
+        ├── Receptor acceptors  (from YAML table)
+        ├── Receptor donors     (from YAML table)
+        └── Aromatic ring centroids (TYR, PHE, TRP)
         │
         ▼
-[6] Búsqueda de contactos  (numpy, distancias vectorizadas)
-    ├── H-bond:        lig aceptor ↔ rec dador     (umbral: Distances_Hidrogen_Bonds)
-    │                  lig dador   ↔ rec aceptor    (umbral: Distances_Hidrogen_Bonds)
-    ├── Aromática:     centroide ↔ centroide         (umbral: Distances_Aromatic)
-    ├── Hidrofóbica:   C apolar lig ↔ C apolar rec   (umbral: Distances_Hidrofobica)
-    ├── Salt bridge:   grupo ± lig ↔ grupo ∓ rec     (umbral: 4.0 Å)
-    └── π-catión:      anillo lig ↔ ARG/LYS/HIS rec  (umbral: 5.0 Å)
+[6] Contact search  (numpy, vectorised distances)
+    ├── H-bond:        lig acceptor ↔ rec donor      (threshold: Distances_Hidrogen_Bonds)
+    │                  lig donor    ↔ rec acceptor    (threshold: Distances_Hidrogen_Bonds)
+    ├── Aromatic:      centroid ↔ centroid             (threshold: Distances_Aromatic)
+    ├── Hydrophobic:   apolar C lig ↔ apolar C rec     (threshold: Distances_Hidrofobica)
+    ├── Salt bridge:   ± group lig ↔ ∓ group rec       (threshold: 4.0 Å)
+    └── π-cation:      lig ring ↔ ARG/LYS/HIS rec      (threshold: 5.0 Å)
         │
         ▼
-[7] Validación por ángulo
-    ├── H-bond:      ángulo D-A···Antecedente  entre 100° y 200°
-    ├── Aromática:   ángulo entre planos de los anillos
-    │                0°–30°  → π-π (paralela / sandwich)
-    │                60°–90° → T-shaped (perpendicular)
-    └── Hid. / salt / π-cat:  validadas solo por distancia
+[7] Angle validation
+    ├── H-bond:    D-A···Antecedent angle between 100° and 200°
+    ├── Aromatic:  angle between ring planes
+    │               0°–30°  → π-π (parallel / sandwich)
+    │               60°–90° → T-shaped (perpendicular)
+    └── Hyd. / salt / π-cat:  validated by distance only
         │
         ▼
-[8] Salidas
-    ├── CSV con todas las interacciones brutas
-    ├── CSV filtrado por distancia
-    ├── CSV filtrado por distancia + ángulo  (interacciones validadas)
-    ├── Resumen en consola  (tabla de interacciones validadas)
-    ├── Resumen acumulativo Interactions_close.csv
-    ├── Centros de masa     CM_all.csv
-    └── Script TCL para VMD (si vmd_output: Yes)
+[8] Outputs
+    ├── CSV with all raw interactions
+    ├── CSV filtered by distance
+    ├── CSV filtered by distance + angle  (validated interactions)
+    ├── Console summary  (table of validated interactions)
+    ├── Cumulative summary Interactions_close.csv
+    ├── Centre of mass    CM_all.csv
+    └── TCL script for VMD (if vmd_output: Yes)
 ```
 
 ---
 
-## Separación de PDB (`split_pdb`)
+## PDB Splitting (`split_pdb`)
 
-Cuando se usa `--complex`, la función `split_pdb()` procesa el PDB antes del análisis:
+When `--complex` is used, `split_pdb()` pre-processes the PDB before analysis:
 
-- Separa registros `ATOM` (proteína) de `HETATM` (ligandos/cofactores)
-- Agrupa los HETATM por nombre de residuo (`resName`)
-- **Excluye agua** automáticamente: HOH, WAT, TIP, TIP3, SOL, DOD
-- Distribuye los registros `CONECT` al archivo HETATM correspondiente (según serial de átomo)
-- Guarda los archivos en `<stem>_split/`
+- Separates `ATOM` records (protein) from `HETATM` records (ligands/cofactors)
+- Groups HETATM records by residue name (`resName`)
+- **Excludes water** automatically: HOH, WAT, TIP, TIP3, SOL, DOD
+- Distributes `CONECT` records to the corresponding HETATM file (by atom serial)
+- Saves files to a temporary directory that is deleted after the run
 
-Ejemplo con un PDB que tiene proteína + ligando LIG + grupo HEM:
+Example with a PDB containing protein + ligand LIG + HEM group:
 
 ```
-complejo_split/
-├── complejo_protein.pdb   ← toda la proteína
-├── complejo_LIG.pdb       ← ligando orgánico + sus CONECT
-└── complejo_HEM.pdb       ← grupo hemo
+<tmpdir>/
+├── complex_protein.pdb   ← full protein
+├── complex_LIG.pdb       ← organic ligand + its CONECT records
+└── complex_HEM.pdb       ← haem group
 ```
 
 ---
 
-## Configuración (`Interacciones_variables.yml`)
+## Configuration (`Interacciones_variables.yml`)
 
 ```yaml
 options:
-  ligand_plot: 'Yes'    # genera imágenes PNG de aceptores, dadores y anillos del ligando
-  vmd_output:  'Yes'    # genera script TCL para visualizar en VMD
+  ligand_plot: 'Yes'    # generates PNG images of ligand acceptors, donors and rings
+  vmd_output:  'Yes'    # generates TCL script for VMD visualisation
 
 distancias:
-  Distances_Hidrogen_Bonds: 3.2   # Å — umbral para puentes de H
-  Distances_Aromatic:       5.5   # Å — umbral centro-a-centro para aromáticas
-  Distances_Hidrofobica:    4.0   # Å — umbral hidrofóbico (alineado con PLIP)
-  centroid_distance:        9.0   # Å — radio de búsqueda de sitio activo (referencia)
-  Distances_C_Simple:       1.54  # Å — enlace C-C simple (referencia)
-  Distances_C_Doble:        2.56  # Å — enlace C=C doble (referencia)
+  Distances_Hidrogen_Bonds: 3.2   # Å — H-bond threshold
+  Distances_Aromatic:       5.5   # Å — centre-to-centre aromatic threshold
+  Distances_Hidrofobica:    4.0   # Å — hydrophobic threshold (aligned with PLIP)
+  centroid_distance:        9.0   # Å — active site search radius (reference)
+  Distances_C_Simple:       1.54  # Å — C-C single bond (reference)
+  Distances_C_Doble:        2.56  # Å — C=C double bond (reference)
 
-acceptors:             # átomos aceptores por residuo
+acceptors:             # acceptor atoms per residue
   ALA: [O]
   TYR: [O, OH]
   ASP: [O, OD1, OD2]
   ...
 
-donors:                # átomos dadores por residuo
+donors:                # donor atoms per residue
   ALA: [N]
   ARG: [N, HNE, HH11, HH12, HH21, HH22, HE, NE, NH1, NH2]
   ...
 
-acceptors_antecedent:  # átomo antecedente del aceptor (para cálculo de ángulo)
+acceptors_antecedent:  # antecedent atom of each acceptor (for angle calculation)
   TYR: {OH: CZ}
   ASP: {OD1: CG, OD2: CG}
   ...
 
-special:               # casos especiales (ej: grupo hemo)
+special:               # special cases (e.g. haem group)
   HEM: [FE, 1.59]
 ```
 
 ---
 
-## Salidas
+## Outputs
 
-### Archivos CSV
+### CSV files
 
-| Archivo | Contenido |
+| File | Content |
 |---|---|
-| `<folder>/Interaction_<rec>_<lig>_all.csv` | Todas las interacciones encontradas (sin filtros) |
-| `<folder>/Interaction_<rec>_<lig>_threshold.csv` | Filtradas por distancia |
-| `<folder>/Interaction_<rec>_<lig>_true.csv` | Validadas por distancia y ángulo |
-| `Interactions_close.csv` | Resumen acumulativo por corrida |
-| `Interactions_all_count.csv` | Conteo por tipo (acceptor / donor / aromatic) |
-| `CM_all.csv` | Centro de masa del ligando por corrida |
+| `<folder>/Interaction_<rec>_<lig>_all.csv` | All interactions found (no filters) |
+| `<folder>/Interaction_<rec>_<lig>_threshold.csv` | Filtered by distance |
+| `<folder>/Interaction_<rec>_<lig>_true.csv` | Validated by distance and angle |
+| `Interactions_close.csv` | Cumulative run summary |
+| `Interactions_all_count.csv` | Count by type (acceptor / donor / aromatic) |
+| `CM_all.csv` | Ligand centre of mass per run |
 
-Columnas de los CSV de interacciones:
+Interaction CSV columns:
 
-| Columna | Descripción |
+| Column | Description |
 |---|---|
-| `Pos R` | Número de residuo del receptor |
-| `Res` | Nombre del residuo (ej: SER, TYR) |
-| `Atom` | Átomo involucrado del receptor |
-| `Dist` | Distancia en Å |
-| `Lig` | Átomo o anillo del ligando |
-| `Type` | Tipo: `acceptor`, `donor`, `aromatic` |
-| `Angle` | Ángulo de validación en grados |
-| `Interaction` | `Yes` / `No` — si cumple criterios de distancia y ángulo |
+| `Pos R` | Receptor residue number |
+| `Res` | Residue name (e.g. SER, TYR) |
+| `Atom` | Receptor atom involved |
+| `Dist` | Distance in Å |
+| `Lig` | Ligand atom or ring involved |
+| `Type` | Type: `acceptor`, `donor`, `aromatic`, `hydrophobic`, `salt_bridge`, `pi_cation` |
+| `Angle` | Validation angle in degrees |
+| `Interaction` | `Yes` / `No` — whether distance and angle criteria are met |
 
-### Script VMD (`vmd_<receptor>_<ligando>.tcl`)
+### VMD script (`vmd_<receptor>_<ligand>.tcl`)
 
-Genera una visualización lista para cargar en VMD con:
-- Proteína completa en NewCartoon transparente
-- Residuos del sitio activo en Licorice
-- Ligando en Licorice
-- Líneas punteadas para cada interacción validada:
-  - **Blanco** — aromáticas
-  - **Rojo** — ligando aceptor (receptor dador)
-  - **Amarillo** — ligando dador (receptor aceptor)
-- Etiqueta con la distancia en Ångströms sobre cada línea
+Generates a visualisation ready to load in VMD:
+- Full protein in transparent NewCartoon
+- Active site residues in Licorice
+- Ligand in Licorice
+- Dashed lines for each validated interaction:
+  - **White** — aromatic
+  - **Red** — ligand acceptor (receptor donor)
+  - **Yellow** — ligand donor (receptor acceptor)
+- Distance label in Ångströms over each line
 
-### Imágenes PNG del ligando (si `ligand_plot: Yes`)
+### Ligand PNG images (if `ligand_plot: Yes`)
 
-| Archivo | Contenido |
+| File | Content |
 |---|---|
-| `<lig>_acceptors.png` | Ligando con átomos aceptores resaltados |
-| `<lig>_donors.png` | Ligando con átomos dadores resaltados |
-| `<lig>_aromatic.png` | Ligando con anillos aromáticos resaltados |
+| `<lig>_acceptors.png` | Ligand with acceptor atoms highlighted and labelled by PDB atom name |
+| `<lig>_donors.png` | Ligand with donor atoms highlighted and labelled by PDB atom name |
+| `<lig>_aromatic.png` | Ligand with aromatic rings highlighted; each ring has a distinct colour and is labelled R1, R2, … |
+
+The atom names in the PNG images match the `Lig` column in the CSV files directly.
 
 ---
 
-## Estructura de carpetas generada
+## Output folder structure
 
-Todo queda dentro de una única carpeta por par `<receptor>_<ligando>/`:
+Everything is stored inside a single folder per pair `<receptor>_<ligand>/`:
 
 ```
-<receptor>_<ligando>/
-├── <receptor>.pdb             ← copia del PDB del receptor
-├── <ligando>.pdb              ← copia del PDB del ligando
-├── <ligando>_old.pdb          ← copia pre-limpieza (remove_bias)
-├── Interaction_*_all.csv      ← todas las interacciones sin filtro
-├── Interaction_*_threshold.csv← filtradas por distancia
-├── Interaction_*_true.csv     ← validadas por distancia + ángulo
-├── summary.csv                ← conteo por tipo de interacción
-├── CM.csv                     ← centro de masa del ligando
-├── vmd_*.tcl                  ← script VMD (si vmd_output: Yes)
-├── *_acceptors.png            ← ligando con aceptores resaltados
-├── *_donors.png               ← ligando con dadores resaltados
-└── *_aromatic.png             ← ligando con anillos resaltados
+<receptor>_<ligand>/
+├── <receptor>.pdb             ← copy of the receptor PDB
+├── <ligand>.pdb               ← copy of the ligand PDB
+├── <ligand>_old.pdb           ← pre-cleanup copy (remove_bias)
+├── Interaction_*_all.csv      ← all interactions, no filter
+├── Interaction_*_threshold.csv← filtered by distance
+├── Interaction_*_true.csv     ← validated by distance + angle
+├── summary.csv                ← interaction count by type
+├── CM.csv                     ← ligand centre of mass
+├── vmd_*.tcl                  ← VMD script (if vmd_output: Yes)
+├── *_acceptors.png            ← ligand with acceptors highlighted
+├── *_donors.png               ← ligand with donors highlighted
+└── *_aromatic.png             ← ligand with aromatic rings highlighted
 ```
 
-En modo batch cada par genera su propia carpeta independiente.
+In batch mode each pair generates its own independent folder.
 
 ---
 
-## Notas
+## Notes
 
-- El script debe correrse desde el directorio donde están los PDB, o bien usar rutas absolutas.
-- Para analizar múltiples ligandos en batch, se puede llamar el script en un loop de shell; los CSV acumulativos (`Interactions_close.csv`, etc.) se van appendeando automáticamente.
-- Los residuos no estándar que no figuren en `acceptors` / `donors` del YAML se omiten sin error.
-- Los anillos aromáticos del ligando deben tener más de 5 átomos para ser considerados (filtra ciclopentano y similares no aromáticos).
+- The script should be run from the directory containing the PDB files, or use absolute paths.
+- For batch analysis of multiple ligands, the script can be called in a shell loop; the cumulative CSVs (`Interactions_close.csv`, etc.) are appended automatically.
+- Non-standard residues not listed in `acceptors` / `donors` in the YAML are silently skipped.
+- Aromatic rings in the ligand must contain more than 5 atoms to be considered (filters out cyclopentane and similar non-aromatic rings).
