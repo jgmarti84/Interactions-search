@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.venv/
+venv/
+
+# Packaging/build
+build/
+dist/
+*.egg-info/
+
+# Tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# OS/editor
+.DS_Store
+.vscode/
+
+# Project outputs
+Interactions_close.csv
+Interactions_all_count.csv
+CM_all.csv
+*_old.pdb
+*/Interaction_*_all.csv
+*/Interaction_*_threshold.csv
+*/Interaction_*_true.csv
+*/summary.csv
+*/CM.csv
+*/vmd_*.tcl
+*/**/*_acceptors.png
+*/**/*_donors.png
+*/**/*_aromatic.png
