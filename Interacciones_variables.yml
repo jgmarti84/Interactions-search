@@ -1,15 +1,24 @@
 options:
   ligand_plot: 'Yes'
   vmd_output: 'Yes'
+  cumulative_output: 'Yes'   # agrega cada par receptor-ligando a Interactions_close.csv y CM_all.csv
 
 distancias:
   Distances_Hidrogen_Bonds: 3.2
   Distances_Aromatic: 5.5
   Distances_Hidrofobica: 4.0
-  centroid_distance: 9
+  centroid_distance: 12   # Å — radio de búsqueda del sitio activo (ahora sí se usa)
   Distances_C_Simple : 1.54
   Distances_C_Doble : 2.56
-  
+
+angulos:
+  Angle_Hidrogen_Bonds_Min: 100   # ° — ángulo mínimo Donor-Aceptor-Antecedente
+  Angle_Hidrogen_Bonds_Max: 180   # ° — tope real: angle_three_points nunca supera 180°
+
+aromaticidad:
+  Ring_Planarity_RMSD_Max: 0.15   # Å — RMSD máximo al plano de mejor ajuste para
+                                  # considerar un anillo aromático (real ~0.01, silla ~0.25)
+
 acceptors:
   ALA: [O]
   GLY: [O]
@@ -57,7 +66,7 @@ donors:
   TYR: [N,HH]
   ASP: [N]
   GLU: [N]
-  ARG: [N,HNE,HH11,HH12,HH21,HH22,HE,NE,NH1,NH2]## ver bien esto
+  ARG: [N,HNE,HH11,HH12,HH21,HH22,HE,NE,NH1,NH2] ## ver bien esto
   HIS: [N,ND1,NE2]
   LYS: [N,HZ1,HZ2,HZ3,NZ]
   SER: [N,HG]
