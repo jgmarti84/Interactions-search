@@ -442,8 +442,11 @@ def scripting_vmd(DF_Interacciones,receptor_points,aromatic_lig_df,DF_Lig,Prot,c
     VDM_TCL = open(f'{folder}/vmd_{receptor_name}_{Lig_name}.tcl' , 'w')
     
     # Cargar el archivo PDB
+    prot_file = Path(Prot).name
+    lig_file  = Path(Lig).name
+
     VDM_TCL.write(f'display projection orthographic\n')
-    VDM_TCL.write(f'mol new "{Prot}"\n')
+    VDM_TCL.write(f'mol new "[file join [file dirname [info script]] {prot_file}]"\n')
     VDM_TCL.write(f'mol modselect 0 0 all\n')
     VDM_TCL.write(f'mol modstyle 0 0 NewCartoon\n')
     VDM_TCL.write(f'mol modcolor 0 0 ColorID 6\n')
@@ -451,7 +454,7 @@ def scripting_vmd(DF_Interacciones,receptor_points,aromatic_lig_df,DF_Lig,Prot,c
     VDM_TCL.write(f'mol addrep top\n')
     VDM_TCL.write(f'mol modselect 1 top resid {residues} and chain {chain}\n')
     VDM_TCL.write(f'mol modstyle 1 top Licorice\n')
-    VDM_TCL.write(f'mol new {Lig}\n')
+    VDM_TCL.write(f'mol new "[file join [file dirname [info script]] {lig_file}]"\n')
     # Crear una representación en Licorice para el ligando
     VDM_TCL.write(f'mol addrep 1\n')
     VDM_TCL.write(f'mol modstyle 0 1 Licorice\n')
@@ -984,12 +987,12 @@ def analyze_pair(receptor_pdb, Ligand_imput, chain_receptor, cfg):
     DF_true = DF_Interacciones[DF_Interacciones['Interaction'] == 'Yes']
     DF_true.to_csv(f'{folder}/Interaction_{receptor}_{ligand}_true.csv')
 
+    shutil.copy(Ligand_imput, f'{folder}/{Path(Ligand_imput).name}')
+    shutil.copy(receptor_pdb, f'{folder}/{Path(receptor_pdb).name}')
+
     if vmd_output == 'Yes':
         scripting_vmd(DF_true, receptor_points, aromatic_lig_df, DF_Lig,
                       receptor_pdb, chain_receptor, Ligand_imput, folder)
-
-    shutil.copy(Ligand_imput, f'{folder}/{Path(Ligand_imput).name}')
-    shutil.copy(receptor_pdb, f'{folder}/{Path(receptor_pdb).name}')
 
     print_summary(receptor_pdb, Ligand_imput, DF_true)
 
@@ -1012,7 +1015,7 @@ def analyze_pair(receptor_pdb, Ligand_imput, chain_receptor, cfg):
 #### Busqueda de interacciones ####
 
 
-if __name__ == '__main__':
+def main():
 
     parser = argparse.ArgumentParser(
         description='Análisis de interacciones proteína-ligando.',
@@ -1114,4 +1117,6 @@ if __name__ == '__main__':
 
     print(f"\nAnalysis complete: {n_ok} pair(s) processed, {n_skip} skipped.")
 
-    
+
+if __name__ == '__main__':
+    main()
