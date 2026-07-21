@@ -23,6 +23,7 @@ dist/
 Interactions_close.csv
 Interactions_all_count.csv
 CM_all.csv
+*_ligands_protein_*
 *_old.pdb
 */Interaction_*_all.csv
 */Interaction_*_threshold.csv
