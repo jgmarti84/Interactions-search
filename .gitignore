@@ -33,3 +33,5 @@ CM_all.csv
 */**/*_acceptors.png
 */**/*_donors.png
 */**/*_aromatic.png
+
+data/

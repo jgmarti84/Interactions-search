@@ -66,7 +66,7 @@ donors:
   TYR: [N,HH]
   ASP: [N]
   GLU: [N]
-  ARG: [N,HNE,HH11,HH12,HH21,HH22,HE,NE,NH1,NH2]## ver bien esto
+  ARG: [N,HNE,HH11,HH12,HH21,HH22,HE,NE,NH1,NH2] ## ver bien esto
   HIS: [N,ND1,NE2]
   LYS: [N,HZ1,HZ2,HZ3,NZ]
   SER: [N,HG]
