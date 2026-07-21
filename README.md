@@ -227,7 +227,7 @@ Interaction CSV columns:
 |---|---|
 | `Pos R` | Receptor residue number |
 | `Res` | Residue name (e.g. SER, TYR) |
-| `Atom` | Receptor atom involved |
+| `Atom` | Receptor atom involved. For `hydrophobic`, when the same ligand atom contacts several atoms of the same residue, they are collapsed into one row and listed comma-separated (e.g. `CD1,CD2,CG`), with `Dist` averaged across them |
 | `Dist` | Distance in Å |
 | `Lig` | Ligand atom or ring involved |
 | `Type` | Type: `acceptor`, `donor`, `aromatic`, `hydrophobic`, `salt_bridge`, `pi_cation` |
