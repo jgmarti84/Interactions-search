@@ -10,7 +10,6 @@ Detects and classifies non-covalent interactions between a ligand and a protein 
 |---|---|
 | `Interactions_search.py` | Main script |
 | `Interacciones_variables.yml` | Distance thresholds, acceptors and donors per residue |
-| `Geometry.py` | Auxiliary geometry module (reference only, not imported directly) |
 
 ---
 
@@ -40,7 +39,7 @@ python Interactions_search.py -r protein.pdb -l ligand.pdb -c A
 python Interactions_search.py -r protein.pdb -l lig1.pdb lig2.pdb lig3.pdb -c A
 ```
 
-Each pair generates its own output folder. Cumulative CSVs (`Interactions_close.csv`, `CM_all.csv`) are appended automatically.
+Each pair generates its own output folder. If `cumulative_output: 'Yes'` in the config, `Interactions_close.csv` and `CM_all.csv` (in the current directory) get one row appended per pair, tagged by `Receptor`/`Ligand`, so successive or batch runs accumulate without overwriting each other.
 
 ### Mode 3 — Complex PDB
 
@@ -97,7 +96,8 @@ Complex PDB (optional)
 [3] Ligand hot-points  (RDKit + SMARTS)
     ├── H-bond acceptors:  [O;H1], [O;H0], [N;H1], [N;H0], [n], [o], [N+]
     ├── H-bond donors:     [O;H], [N;H2], [N;H], [S;H], [nH]
-    └── Aromatic rings:    detected via ring_info, filtered by size > 5
+    └── Aromatic rings:    detected via ring_info, filtered by size > 5 and by
+                           planarity (best-fit-plane RMSD ≤ Ring_Planarity_RMSD_Max)
         │
         ▼
 [4] Receptor active site  (BioPython)
@@ -167,16 +167,25 @@ Example with a PDB containing protein + ligand LIG + HEM group:
 
 ```yaml
 options:
-  ligand_plot: 'Yes'    # generates PNG images of ligand acceptors, donors and rings
-  vmd_output:  'Yes'    # generates TCL script for VMD visualisation
+  ligand_plot: 'Yes'         # generates PNG images of ligand acceptors, donors and rings
+  vmd_output:  'Yes'         # generates TCL script for VMD visualisation
+  cumulative_output: 'Yes'   # appends each pair to Interactions_close.csv / CM_all.csv
 
 distancias:
   Distances_Hidrogen_Bonds: 3.2   # Å — H-bond threshold
   Distances_Aromatic:       5.5   # Å — centre-to-centre aromatic threshold
   Distances_Hidrofobica:    4.0   # Å — hydrophobic threshold (aligned with PLIP)
-  centroid_distance:        9.0   # Å — active site search radius (reference)
+  centroid_distance:       12.0   # Å — active site search radius
   Distances_C_Simple:       1.54  # Å — C-C single bond (reference)
   Distances_C_Doble:        2.56  # Å — C=C double bond (reference)
+
+angulos:
+  Angle_Hidrogen_Bonds_Min: 100    # ° — minimum Donor-Acceptor-Antecedent angle
+  Angle_Hidrogen_Bonds_Max: 180    # ° — maximum angle (180° is the geometric ceiling)
+
+aromaticidad:
+  Ring_Planarity_RMSD_Max:  0.15   # Å — max RMSD to the ring's best-fit plane to
+                                   # be considered aromatic (real rings ~0.01, chair ~0.25)
 
 acceptors:             # acceptor atoms per residue
   ALA: [O]
@@ -209,9 +218,8 @@ special:               # special cases (e.g. haem group)
 | `<folder>/Interaction_<rec>_<lig>_all.csv` | All interactions found (no filters) |
 | `<folder>/Interaction_<rec>_<lig>_threshold.csv` | Filtered by distance |
 | `<folder>/Interaction_<rec>_<lig>_true.csv` | Validated by distance and angle |
-| `Interactions_close.csv` | Cumulative run summary |
-| `Interactions_all_count.csv` | Count by type (acceptor / donor / aromatic) |
-| `CM_all.csv` | Ligand centre of mass per run |
+| `Interactions_close.csv` | Cumulative run summary, one row per pair (same content as `summary.csv`, including per-type counts) — requires `cumulative_output: 'Yes'` |
+| `CM_all.csv` | Ligand centre of mass, one row per pair — requires `cumulative_output: 'Yes'` |
 
 Interaction CSV columns:
 
@@ -277,6 +285,6 @@ In batch mode each pair generates its own independent folder.
 ## Notes
 
 - The script should be run from the directory containing the PDB files, or use absolute paths.
-- For batch analysis of multiple ligands, the script can be called in a shell loop; the cumulative CSVs (`Interactions_close.csv`, etc.) are appended automatically.
+- For batch analysis of multiple ligands, the script can be called in a shell loop; with `cumulative_output: 'Yes'`, `Interactions_close.csv` and `CM_all.csv` are appended automatically across runs (set to `'No'` to disable).
 - Non-standard residues not listed in `acceptors` / `donors` in the YAML are silently skipped.
-- Aromatic rings in the ligand must contain more than 5 atoms to be considered (filters out cyclopentane and similar non-aromatic rings).
+- Aromatic rings in the ligand must contain more than 5 atoms and be planar (RMSD to the best-fit plane ≤ `Ring_Planarity_RMSD_Max`) to be considered. Planarity, not RDKit's aromaticity flag, is used because `Chem.MolFromPDBFile` does not reliably perceive aromaticity from PDB files without explicit bond orders.

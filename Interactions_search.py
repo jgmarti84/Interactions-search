@@ -46,13 +46,6 @@ def extract_coords_from_pdb(pdb_filename):
 
     return (coords,center_of_mass)
 
-# Función para obtener coordenadas por índice de átomo
-def get_coord_by_atom_id(atom_id, pdb_coords):
-    for coord in pdb_coords:
-        if coord[1] == atom_id:
-            return f"{atom_id}:{coord[5]}:{coord[6]}:{coord[7]}"
-    return None
-
 
 def _draw_mol_labeled(mol, highlight_atoms, atom_labels, filename, size=(600, 600)):
     """Dibuja la molécula con átomos resaltados y etiquetas atomNote."""
@@ -176,16 +169,21 @@ def carga_variables():
 
     ligand_plot = str(Interaciones['options']['ligand_plot'])
     vmd_output = str(Interaciones['options']['vmd_output'])
+    cumulative_output = str(Interaciones['options']['cumulative_output'])
 
     Distances_Hidrogen_Bonds =float(Interaciones['distancias']['Distances_Hidrogen_Bonds'])
     Distances_Aromatic = float(Interaciones['distancias']['Distances_Aromatic'])
     Distancia_Hidrofobica = float(Interaciones['distancias']['Distances_Hidrofobica'])
-    
+    Distancia_Centro_Activo = float(Interaciones['distancias']['centroid_distance'])
+    Angle_Hidrogen_Bonds_Min = float(Interaciones['angulos']['Angle_Hidrogen_Bonds_Min'])
+    Angle_Hidrogen_Bonds_Max = float(Interaciones['angulos']['Angle_Hidrogen_Bonds_Max'])
+    Ring_Planarity_RMSD_Max = float(Interaciones['aromaticidad']['Ring_Planarity_RMSD_Max'])
+
     Aceptores_Prot = Interaciones['acceptors']
     Dadores_Prot = Interaciones['donors']
     Aceptot_antecedent = Interaciones['acceptors_antecedent']
     Special_case = Interaciones['special']
-    return(ligand_plot,vmd_output,Distances_Hidrogen_Bonds,Distances_Aromatic,Distancia_Hidrofobica,Aceptores_Prot,Dadores_Prot,Aceptot_antecedent,Special_case)
+    return(ligand_plot,vmd_output,cumulative_output,Distances_Hidrogen_Bonds,Distances_Aromatic,Distancia_Hidrofobica,Distancia_Centro_Activo,Angle_Hidrogen_Bonds_Min,Angle_Hidrogen_Bonds_Max,Ring_Planarity_RMSD_Max,Aceptores_Prot,Dadores_Prot,Aceptot_antecedent,Special_case)
 
 
 
@@ -300,9 +298,10 @@ def residuos_contacto(Receptor_Caso,Lig_Caso,receptor_points,DF_Lig,DF_Interacci
                 closest_data.iloc[2],  # Y
                 closest_data.iloc[3],  # Z
                 min_distance,           # Distancia
-                Sub_Set_Ligando.iloc[j, 0],  # Identificador del ligando
+                Sub_Set_Ligando.iloc[j, 0],  # Nombre del átomo del ligando (solo display)
                 Lig_Caso,               # Caso del ligando
-                0, 0                    # Valores adicionales
+                0, 0,                   # Valores adicionales
+                Sub_Set_Ligando.iloc[j, 5],  # Atom ID (serial único, para joins internos)
             ]
     return(DF_Interacciones)
 
@@ -316,11 +315,12 @@ def generate_df_ligand(pdb_coords):
 
 
 def Busqueda_Antecesor_Lig(Atomo_ID,Lig_DF):
-    # Punto dado
-    punto_dado = np.array(Lig_DF.query('Element == @Atomo_ID')[['X' , 'Y' , 'Z']])
-    # Filtrar átomos que no sean H
+    # Atomo_ID es el serial único de átomo (columna 'Atom ID'), no el nombre:
+    # el nombre puede repetirse en el ligando y matchear el átomo equivocado.
+    punto_dado = np.array(Lig_DF.query('`Atom ID` == @Atomo_ID')[['X' , 'Y' , 'Z']])
+    # Filtrar átomos que no sean H, excluyendo el propio átomo por serial exacto
     df_filtrado = Lig_DF[~Lig_DF['Element'].str.contains('H')]
-    df_filtrado = df_filtrado[~df_filtrado['Element'].str.contains(Atomo_ID)]
+    df_filtrado = df_filtrado[df_filtrado['Atom ID'] != Atomo_ID]
     # Calcular la distancia euclidiana
     df_filtrado['Distancia'] = np.sqrt((df_filtrado['X'] - punto_dado[0][0])**2 + 
                                     (df_filtrado['Y'] - punto_dado[0][1])**2 + 
@@ -383,19 +383,36 @@ def aromatic_angle(anillo_ligand, anillo_recept):
     
     return angulo_deg
 
-def search_rings(mol, pdb_coords, numero_anillo_aromatico):
-    Chem.Kekulize(mol, clearAromaticFlags=True)
+def _ring_planarity_rmsd(pdb_coords, ring):
+    """RMSD (Å) de los átomos del anillo respecto de su plano de mejor ajuste.
+    Los anillos aromáticos son planos (RMSD ~0); un anillo saturado (ej. ciclohexano
+    en silla) se desvía notablemente (~0.2-0.3 Å)."""
+    coords = np.array([[pdb_coords[a][5], pdb_coords[a][6], pdb_coords[a][7]] for a in ring])
+    centered = coords - coords.mean(axis=0)
+    _, _, vh = np.linalg.svd(centered)
+    normal = vh[-1]
+    return float(np.sqrt(np.mean((centered @ normal) ** 2)))
+
+
+def search_rings(mol, pdb_coords, numero_anillo_aromatico, planarity_rmsd_max):
+    """Identifica anillos aromáticos: tamaño > numero_anillo_aromatico y planos
+    (RMSD respecto del plano de mejor ajuste por debajo de planarity_rmsd_max).
+    No se usa mol.GetIsAromatic(): RDKit no perfila aromaticidad de forma fiable
+    para moléculas leídas desde PDB (sin órdenes de enlace explícitos), así que
+    la planaridad geométrica 3D es el criterio real de aromaticidad aquí."""
     ring_info = mol.GetRingInfo()
     ring_atoms = ring_info.AtomRings()
-    ring_data = [{'Ring': i+1, 'Atoms': ring, 'Ring Size': len(ring)}
-                 for i, ring in enumerate(ring_atoms)]
+    ring_data = []
+    for ring in ring_atoms:
+        if len(ring) > numero_anillo_aromatico and \
+           _ring_planarity_rmsd(pdb_coords, ring) <= planarity_rmsd_max:
+            ring_data.append({'Ring': len(ring_data) + 1, 'Atoms': ring, 'Ring Size': len(ring)})
     rings_data = []
     for ring in ring_data:
-        if ring['Ring Size'] > numero_anillo_aromatico:
-            label = f"aromatic {ring['Ring']} (#{ring['Ring Size']})"
-            for atom in ring['Atoms']:
-                rings_data.append([pdb_coords[atom][1], pdb_coords[atom][5],
-                                    pdb_coords[atom][6], pdb_coords[atom][7], label])
+        label = f"aromatic {ring['Ring']} (#{ring['Ring Size']})"
+        for atom in ring['Atoms']:
+            rings_data.append([pdb_coords[atom][1], pdb_coords[atom][5],
+                                pdb_coords[atom][6], pdb_coords[atom][7], label])
     return ring_data, rings_data
 
 _RING_COLORS = [
@@ -490,8 +507,8 @@ def scripting_vmd(DF_Interacciones,receptor_points,aromatic_lig_df,DF_Lig,Prot,c
             Recept = DF_Interacciones.iloc[j,0]
             Coord2 = np.array(receptor_points[(receptor_points['Pos'] == Recept) & (receptor_points['Atom'] == DF_Interacciones.iloc[j,2])][['X','Y','Z']])[0]
             # Ligand #
-            atomo = DF_Interacciones.iloc[j,4]
-            Coord1 = np.array(DF_Lig[(DF_Lig['Átomo'] == atomo)][['Coord X' , 'Coord Y' , 'Coord Z']])[0]
+            atomo_id = DF_Interacciones.iloc[j,8]
+            Coord1 = np.array(DF_Lig[(DF_Lig['Atom ID'] == atomo_id)][['Coord X' , 'Coord Y' , 'Coord Z']])[0]
             VDM_TCL.write('graphics top color red\n')
             VDM_TCL.write('graphics top line {'+str(Coord1[0])+' '+str(Coord1[1])+' '+str(Coord1[2])+'} {'+str(Coord2[0])+' '+str(Coord2[1])+' '+str(Coord2[2])+'} width 5 style dashed\n')
             VDM_TCL.write(f'set Recptor{j} [atomselect 0 "chain {chain} and resid {DF_Interacciones.iloc[j,0]} and resname {DF_Interacciones.iloc[j,1]} and name CZ"]\n')
@@ -516,8 +533,8 @@ def scripting_vmd(DF_Interacciones,receptor_points,aromatic_lig_df,DF_Lig,Prot,c
             Recept = DF_Interacciones.iloc[j,0]
             Coord2 = np.array(receptor_points[(receptor_points['Pos'] == Recept) & (receptor_points['Atom'] == DF_Interacciones.iloc[j,2])][['X','Y','Z']])[0]
             # Ligand #
-            atomo = DF_Interacciones.iloc[j,4]
-            Coord1 = np.array(DF_Lig[(DF_Lig['Átomo'] == atomo)][['Coord X' , 'Coord Y' , 'Coord Z']])[0]
+            atomo_id = DF_Interacciones.iloc[j,8]
+            Coord1 = np.array(DF_Lig[(DF_Lig['Atom ID'] == atomo_id)][['Coord X' , 'Coord Y' , 'Coord Z']])[0]
             VDM_TCL.write('graphics top color yellow\n')
             VDM_TCL.write('graphics top line {'+str(Coord1[0])+' '+str(Coord1[1])+' '+str(Coord1[2])+'} {'+str(Coord2[0])+' '+str(Coord2[1])+' '+str(Coord2[2])+'} width 5 style dashed\n')
             VDM_TCL.write(f'set Recptor{j} [atomselect 0 "chain {chain} and resid {DF_Interacciones.iloc[j,0]} and resname {DF_Interacciones.iloc[j,1]} and name CZ"]\n')
@@ -697,7 +714,7 @@ _HYDROPHOBIC_ATOMS = {
     'TYR': {'CB', 'CG', 'CD1', 'CD2', 'CE1', 'CE2'},
 }
 _HPHO_LIG_SMARTS = '[c,C;!$([C,c]~[#7,#8,#16,#15,#9,#17,#35,#53])]'
-_DF_COLS = ['Pos R', 'Res', 'Atom', 'Dist', 'Lig', 'Type', 'Angle', 'Interaction']
+_DF_COLS = ['Pos R', 'Res', 'Atom', 'Dist', 'Lig', 'Type', 'Angle', 'Interaction', 'LigID']
 
 
 def search_hydrophobic(mol, pdb_coords, DF_Active_Site, Distancia_Hidrofobica):
@@ -724,7 +741,7 @@ def search_hydrophobic(mol, pdb_coords, DF_Active_Site, Distancia_Hidrofobica):
         for k in np.where(dists < Distancia_Hidrofobica)[0]:
             r = rec_rows.iloc[k]
             results.append([int(r['Pos']), r['Residue'], r['Atom'],
-                             round(dists[k], 3), lig_pt[0], 'hydrophobic', 0, 'Yes'])
+                             round(dists[k], 3), lig_pt[0], 'hydrophobic', 0, 'Yes', np.nan])
     return pd.DataFrame(results, columns=_DF_COLS) if results else pd.DataFrame(columns=_DF_COLS)
 
 
@@ -763,13 +780,13 @@ def search_salt_bridges(mol, pdb_coords, DF_Active_Site):
                 d = np.linalg.norm(rc - np.array([x, y, z]))
                 if d < _SALT_DIST:
                     results.append([rec.Pos, rec.Residue, rec.Atom, round(d,3),
-                                     atom, 'salt_bridge', 0, 'Yes'])
+                                     atom, 'salt_bridge', 0, 'Yes', np.nan])
         if rec.Atom in _SALT_POS_ATOMS.get(rec.Residue, set()):
             for atom, x, y, z in anion_lig:
                 d = np.linalg.norm(rc - np.array([x, y, z]))
                 if d < _SALT_DIST:
                     results.append([rec.Pos, rec.Residue, rec.Atom, round(d,3),
-                                     atom, 'salt_bridge', 0, 'Yes'])
+                                     atom, 'salt_bridge', 0, 'Yes', np.nan])
     return pd.DataFrame(results, columns=_DF_COLS) if results else pd.DataFrame(columns=_DF_COLS)
 
 
@@ -793,7 +810,7 @@ def search_pi_cation(DF_Active_Site, aromatic_lig_df):
                 d = np.linalg.norm(ring_center - np.array([rec.X, rec.Y, rec.Z]))
                 if d < _PI_CATION_DIST:
                     results.append([rec.Pos, rec.Residue, rec.Atom, round(d,3),
-                                     cas, 'pi_cation', 0, 'Yes'])
+                                     cas, 'pi_cation', 0, 'Yes', np.nan])
     return pd.DataFrame(results, columns=_DF_COLS) if results else pd.DataFrame(columns=_DF_COLS)
 
 
@@ -809,6 +826,13 @@ _TYPE_LABELS = {
     'salt_bridge': 'Salt bridge',
     'pi_cation':   'π-cation',
 }
+
+
+def _append_cumulative_csv(row, filename):
+    """Agrega una fila (Receptor+Ligand identifican el par) a un CSV acumulado
+    en el directorio actual. Escribe el header solo si el archivo no existe."""
+    path = Path(filename)
+    pd.DataFrame([row]).to_csv(path, mode='a', header=not path.exists(), index=False)
 
 
 def print_summary(receptor, ligand, DF_validated):
@@ -845,14 +869,18 @@ def analyze_pair(receptor_pdb, Ligand_imput, chain_receptor, cfg):
     """Ejecuta el pipeline completo para un par receptor-ligando."""
     ligand_plot           = cfg['ligand_plot']
     vmd_output            = cfg['vmd_output']
+    cumulative_output     = cfg['cumulative_output']
     Distances_Hidrogen_Bonds = cfg['Distances_Hidrogen_Bonds']
     Distances_Aromatic    = cfg['Distances_Aromatic']
     Distancia_Hidrofobica = cfg['Distancia_Hidrofobica']
+    Distancia_Centro_Activo = cfg['Distancia_Centro_Activo']
+    Angle_Hidrogen_Bonds_Min = cfg['Angle_Hidrogen_Bonds_Min']
+    Angle_Hidrogen_Bonds_Max = cfg['Angle_Hidrogen_Bonds_Max']
+    Ring_Planarity_RMSD_Max = cfg['Ring_Planarity_RMSD_Max']
     Aceptores_Prot        = cfg['Aceptores_Prot']
     Dadores_Prot          = cfg['Dadores_Prot']
     Aceptot_antecedent    = cfg['Aceptot_antecedent']
 
-    Distancia_Centro_Activo = 12
     threshold_PH            = 4
     numero_anillo_aromatico = 5
 
@@ -874,24 +902,24 @@ def analyze_pair(receptor_pdb, Ligand_imput, chain_receptor, cfg):
     acceptor_atoms, donor_atoms = search_hot_points(Ligand_imput, mol, pdb_coords, ligand_plot, folder)
 
     # ── Anillos aromáticos ────────────────────────────────────────
-    aromatic_rings_data, rings_data = search_rings(mol, pdb_coords, numero_anillo_aromatico)
+    aromatic_rings_data, rings_data = search_rings(mol, pdb_coords, numero_anillo_aromatico,
+                                                    Ring_Planarity_RMSD_Max)
     if ligand_plot == 'Yes':
         visualize_rings(mol, aromatic_rings_data, Ligand_imput, folder)
     DF_Aro = pd.DataFrame(rings_data, columns=['Átomo', 'Coord X', 'Coord Y', 'Coord Z', 'Caso'])
 
     # ── DataFrame de puntos del ligando ──────────────────────────
+    # acceptor_atoms/donor_atoms ya son índices únicos dentro de pdb_coords: se usan
+    # directamente (en vez de rebuscar por nombre de átomo, que puede repetirse).
     coordenadas = []
-    for j in range(len(acceptor_atoms)):
-        Coord = get_coord_by_atom_id(pdb_coords[acceptor_atoms[j]][1], pdb_coords)
-        if Coord:
-            t = Coord.split(':')
-            coordenadas.append([t[0], float(t[1]), float(t[2]), float(t[3]), 'acceptor'])
-    for j in range(len(donor_atoms)):
-        Coord = get_coord_by_atom_id(pdb_coords[donor_atoms[j]][1], pdb_coords)
-        if Coord:
-            t = Coord.split(':')
-            coordenadas.append([t[0], float(t[1]), float(t[2]), float(t[3]), 'donor'])
-    DF_Lig = pd.DataFrame(coordenadas, columns=['Átomo', 'Coord X', 'Coord Y', 'Coord Z', 'Caso'])
+    for idx in acceptor_atoms:
+        p = pdb_coords[idx]
+        coordenadas.append([p[1], p[5], p[6], p[7], 'acceptor', p[0]])
+    for idx in donor_atoms:
+        p = pdb_coords[idx]
+        coordenadas.append([p[1], p[5], p[6], p[7], 'donor', p[0]])
+    DF_Lig = pd.DataFrame(coordenadas,
+                          columns=['Átomo', 'Coord X', 'Coord Y', 'Coord Z', 'Caso', 'Atom ID'])
     DF_Lig = pd.concat([DF_Lig, DF_Aro], ignore_index=True)
 
     # ── Receptor: sitio activo ────────────────────────────────────
@@ -904,7 +932,8 @@ def analyze_pair(receptor_pdb, Ligand_imput, chain_receptor, cfg):
     # ── DataFrame de interacciones ────────────────────────────────
     DF_Interacciones = pd.DataFrame({c: pd.Series(dtype=t) for c, t in [
         ('Pos R', 'int'), ('Res', 'object'), ('Atom', 'object'), ('Dist', 'float64'),
-        ('Lig', 'object'), ('Type', 'object'), ('Angle', 'float64'), ('Interaction', 'object')]})
+        ('Lig', 'object'), ('Type', 'object'), ('Angle', 'float64'), ('Interaction', 'object'),
+        ('LigID', 'float64')]})
 
     DF_Interacciones = residuos_contacto('Dador',   'acceptor', receptor_points,
                                           DF_Lig, DF_Interacciones, threshold_PH)
@@ -923,7 +952,7 @@ def analyze_pair(receptor_pdb, Ligand_imput, chain_receptor, cfg):
             closest = Sub_Set_Receptor.iloc[idx]
             DF_Interacciones.loc[len(DF_Interacciones)] = [
                 closest.iloc[1], closest.iloc[2], closest.iloc[3],
-                distances[idx], Sub_Set_Ligando.iloc[0, 4], 'aromatic', 0, 0]
+                distances[idx], Sub_Set_Ligando.iloc[0, 4], 'aromatic', 0, 0, np.nan]
 
     DF_Lig_All = generate_df_ligand(pdb_coords)
     DF_Interacciones = DF_Interacciones.drop_duplicates()
@@ -940,14 +969,14 @@ def analyze_pair(receptor_pdb, Ligand_imput, chain_receptor, cfg):
     for j in range(DF_Interacciones.shape[0]):
         tipo = DF_Interacciones.iloc[j, 5]
         if tipo == 'acceptor':
-            Aceptor_Antecedent = Busqueda_Antecesor_Lig(DF_Interacciones.iloc[j, 4], DF_Lig_All)
-            Aceptor  = np.array(DF_Lig[DF_Lig.iloc[:,0] == DF_Interacciones.iloc[j,4]].iloc[0, [1,2,3]])
+            Aceptor_Antecedent = Busqueda_Antecesor_Lig(DF_Interacciones.iloc[j, 8], DF_Lig_All)
+            Aceptor  = np.array(DF_Lig[DF_Lig['Atom ID'] == DF_Interacciones.iloc[j,8]].iloc[0, [1,2,3]])
             resultado = DF_Active_Site[(DF_Active_Site['Pos'] == DF_Interacciones.iloc[j,0]) &
                                        (DF_Active_Site['Atom'] == DF_Interacciones.iloc[j,2])]
             Donor = np.array(resultado[['X','Y','Z']]).reshape(-1)
             DF_Interacciones.iloc[j, 6] = float(angle_three_points(Donor, Aceptor, Aceptor_Antecedent))
         elif tipo == 'donor':
-            Donor    = np.array(DF_Lig[DF_Lig.iloc[:,0] == DF_Interacciones.iloc[j,4]].iloc[0, [1,2,3]])
+            Donor    = np.array(DF_Lig[DF_Lig['Atom ID'] == DF_Interacciones.iloc[j,8]].iloc[0, [1,2,3]])
             resultado = DF_Active_Site[(DF_Active_Site['Pos'] == DF_Interacciones.iloc[j,0]) &
                                        (DF_Active_Site['Atom'] == DF_Interacciones.iloc[j,2])]
             Aceptor  = np.array(resultado[['X','Y','Z']]).reshape(-1)
@@ -975,7 +1004,8 @@ def analyze_pair(receptor_pdb, Ligand_imput, chain_receptor, cfg):
             pass  # validadas en sus funciones con criterio de distancia
         elif tipo in ('acceptor', 'donor'):
             DF_Interacciones.iloc[k, 7] = (
-                'Yes' if dist < Distances_Hidrogen_Bonds and 100 < ang < 200 else 'No')
+                'Yes' if dist < Distances_Hidrogen_Bonds
+                and Angle_Hidrogen_Bonds_Min < ang <= Angle_Hidrogen_Bonds_Max else 'No')
         elif tipo == 'aromatic':
             if dist < Distances_Aromatic:
                 # parallel/sandwich: 0-30°  |  T-shaped: 60-90°
@@ -986,11 +1016,12 @@ def analyze_pair(receptor_pdb, Ligand_imput, chain_receptor, cfg):
     DF_Interacciones = DF_Interacciones.drop_duplicates()
 
     # ── Salidas CSV ───────────────────────────────────────────────
-    DF_Interacciones.to_csv(f'{folder}/Interaction_{receptor}_{ligand}_all.csv')
+    # LigID (serial de átomo, uso interno) se excluye de los CSV para no cambiar el esquema.
+    DF_Interacciones.drop(columns=['LigID']).to_csv(f'{folder}/Interaction_{receptor}_{ligand}_all.csv')
     DF_dist = DF_Interacciones[DF_Interacciones['Dist'] < Distances_Aromatic]
-    DF_dist.to_csv(f'{folder}/Interaction_{receptor}_{ligand}_threshold.csv')
+    DF_dist.drop(columns=['LigID']).to_csv(f'{folder}/Interaction_{receptor}_{ligand}_threshold.csv')
     DF_true = DF_Interacciones[DF_Interacciones['Interaction'] == 'Yes']
-    DF_true.to_csv(f'{folder}/Interaction_{receptor}_{ligand}_true.csv')
+    DF_true.drop(columns=['LigID']).to_csv(f'{folder}/Interaction_{receptor}_{ligand}_true.csv')
 
     if vmd_output == 'Yes':
         scripting_vmd(DF_true, receptor_points, aromatic_lig_df, DF_Lig,
@@ -1015,6 +1046,14 @@ def analyze_pair(receptor_pdb, Ligand_imput, chain_receptor, cfg):
     pd.DataFrame([{'Receptor': receptor, 'Ligand': ligand,
                    'CM X': CM[0], 'CM Y': CM[1], 'CM Z': CM[2]}]).to_csv(
         f'{folder}/CM.csv', index=False)
+
+    # ── Acumulados globales (fuera de la carpeta del par) ─────────
+    # Cada fila queda identificada por Receptor+Ligand, así que corridas
+    # sucesivas o en batch no se pisan entre sí.
+    if cumulative_output == 'Yes':
+        _append_cumulative_csv(dat, 'Interactions_close.csv')
+        _append_cumulative_csv({'Receptor': receptor, 'Ligand': ligand,
+                                 'CM X': CM[0], 'CM Y': CM[1], 'CM Z': CM[2]}, 'CM_all.csv')
 
 
 #### Busqueda de interacciones ####
@@ -1087,16 +1126,22 @@ if __name__ == '__main__':
         pairs = [(args.receptor_pdb, lig) for lig in args.ligand_input]
 
     # ── Cargar configuración una sola vez ─────────────────────────
-    (ligand_plot, vmd_output, Distances_Hidrogen_Bonds, Distances_Aromatic,
-     Distancia_Hidrofobica, Aceptores_Prot, Dadores_Prot,
+    (ligand_plot, vmd_output, cumulative_output, Distances_Hidrogen_Bonds, Distances_Aromatic,
+     Distancia_Hidrofobica, Distancia_Centro_Activo, Angle_Hidrogen_Bonds_Min,
+     Angle_Hidrogen_Bonds_Max, Ring_Planarity_RMSD_Max, Aceptores_Prot, Dadores_Prot,
      Aceptot_antecedent, Special_case) = carga_variables()
 
     cfg = {
         'ligand_plot':              ligand_plot,
         'vmd_output':               vmd_output,
+        'cumulative_output':        cumulative_output,
         'Distances_Hidrogen_Bonds': Distances_Hidrogen_Bonds,
         'Distances_Aromatic':       Distances_Aromatic,
         'Distancia_Hidrofobica':    Distancia_Hidrofobica,
+        'Distancia_Centro_Activo':  Distancia_Centro_Activo,
+        'Angle_Hidrogen_Bonds_Min': Angle_Hidrogen_Bonds_Min,
+        'Angle_Hidrogen_Bonds_Max': Angle_Hidrogen_Bonds_Max,
+        'Ring_Planarity_RMSD_Max':  Ring_Planarity_RMSD_Max,
         'Aceptores_Prot':           Aceptores_Prot,
         'Dadores_Prot':             Dadores_Prot,
         'Aceptot_antecedent':       Aceptot_antecedent,
