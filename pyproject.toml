@@ -14,6 +14,7 @@ dependencies = [
   "pandas",
   "numpy",
   "pyyaml",
+  "pydantic>=2.7",
 ]
 
 [project.optional-dependencies]
@@ -24,8 +25,11 @@ dev = [
   "build>=1.2",
 ]
 
+[tool.setuptools.packages.find]
+where = ["src"]
+
 [tool.setuptools]
-py-modules = ["Interactions_search", "Geometry"]
+py-modules = ["Interactions_search"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
