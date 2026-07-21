@@ -554,11 +554,14 @@ def remove_bias(file_path, folder):
         f.writelines(lines)
 
 
-def split_pdb(pdb_path, output_dir='.', exclude_water=True):
+def split_pdb(pdb_path, output_dir='.', exclude_water=True, force_ligand_names=None):
     """
     Separa un PDB complejo en proteína (ATOM) y un archivo por cada grupo HETATM único.
     El agua (HOH, WAT, TIP3, SOL) se excluye por defecto.
     Los registros CONECT se distribuyen al archivo del grupo HETATM correspondiente.
+
+    force_ligand_names : set de resnames (ej: {'TF3', '7FW'}) que se tratan como ligando
+                         aunque estén escritos como ATOM en vez de HETATM en el PDB.
 
     Retorna:
         protein_path : Path al PDB de la proteína
@@ -567,6 +570,7 @@ def split_pdb(pdb_path, output_dir='.', exclude_water=True):
     from collections import defaultdict
 
     WATER_NAMES = {'HOH', 'WAT', 'TIP', 'TIP3', 'SOL', 'DOD'}
+    force_ligand_names = {n.upper() for n in force_ligand_names} if force_ligand_names else set()
 
     protein_lines = []
     het_lines     = defaultdict(list)   # resname -> [líneas HETATM]
@@ -577,7 +581,11 @@ def split_pdb(pdb_path, output_dir='.', exclude_water=True):
         for line in f:
             rec = line[:6].strip()
             if rec == 'ATOM':
-                protein_lines.append(line)
+                resname = line[17:20].strip()
+                if resname in force_ligand_names:
+                    het_lines[resname].append('HETATM' + line[6:])
+                else:
+                    protein_lines.append(line)
             elif rec == 'HETATM':
                 resname = line[17:20].strip()
                 if exclude_water and resname in WATER_NAMES:
@@ -1023,6 +1031,7 @@ if __name__ == '__main__':
             '  Batch        : -r proteina.pdb -l lig1.pdb lig2.pdb lig3.pdb -c A\n'
             '  PDB complejo : -x complejo.pdb -c A\n'
             '                 -x complejo.pdb -c A -n LIG\n'
+            '  Sin HETATM   : -x complejo.pdb -c A -f TF3 (ligando guardado como ATOM)\n'
         )
     )
     grp = parser.add_mutually_exclusive_group(required=True)
@@ -1036,6 +1045,9 @@ if __name__ == '__main__':
                         help='Cadena de la proteína.')
     parser.add_argument('-n', '--lig_name', default=None,
                         help='Nombre del HETATM a usar como ligando (con --complex).')
+    parser.add_argument('-f', '--force_ligand', nargs='+', default=None,
+                        help='Resname(s) a tratar como ligando aunque figuren como ATOM '
+                             'en vez de HETATM en el PDB complejo (ej: -f TF3 7FW).')
 
     args = parser.parse_args()
 
@@ -1047,7 +1059,8 @@ if __name__ == '__main__':
     if args.complex_pdb:
         print(f"\n[Split] Splitting: {args.complex_pdb}")
         tmp_dir = tempfile.mkdtemp(prefix='interactions_split_')
-        protein_path, het_paths = split_pdb(args.complex_pdb, output_dir=tmp_dir)
+        protein_path, het_paths = split_pdb(args.complex_pdb, output_dir=tmp_dir,
+                                            force_ligand_names=args.force_ligand)
         print(f"  Protein  -> {protein_path}")
         if not het_paths:
             print("  No HETATM groups found (water excluded).")

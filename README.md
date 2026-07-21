@@ -56,6 +56,16 @@ python Interactions_search.py -x complex.pdb -c A -n LIG
 
 If multiple HETATM groups are present and `-n` is not specified, the script lists the available names and exits without analysing.
 
+If the complex PDB has no `HETATM` records at all (ligand saved as `ATOM`, e.g. some CHARMM/AMBER-prepped structures), use `-f` to tell `split_pdb` which residue name(s) to treat as ligand:
+
+```bash
+# Ligand TF3 is stored as ATOM records, not HETATM
+python Interactions_search.py -x complex.pdb -c A -f TF3
+
+# Multiple forced ligand names; still use -n to pick one for this run
+python Interactions_search.py -x complex.pdb -c A -f TF3 7FW -n TF3
+```
+
 ### Arguments
 
 | Argument | Description |
@@ -65,6 +75,7 @@ If multiple HETATM groups are present and `-n` is not specified, the script list
 | `-l / --ligand_input` | Ligand PDB(s). Accepts one or several (batch). |
 | `-c / --chain_receptor` | Protein chain (e.g. `A`). |
 | `-n / --lig_name` | HETATM name when multiple groups exist in `--complex`. |
+| `-f / --force_ligand` | Residue name(s) to treat as ligand even if stored as `ATOM` instead of `HETATM` in `--complex`. |
 
 ---
 
