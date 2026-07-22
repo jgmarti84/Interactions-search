@@ -19,6 +19,11 @@ aromaticidad:
   Ring_Planarity_RMSD_Max: 0.15   # Å — RMSD máximo al plano de mejor ajuste para
                                   # considerar un anillo aromático (real ~0.01, silla ~0.25)
 
+pockets:
+  min_residues: 3            # mínimo de residuos distintos contactando el mismo fragmento del ligando
+  coverage_threshold: 0.5    # R (0-1) del vector resultante normalizado; R bajo = residuos distribuidos
+                              # alrededor del fragmento (pocket real), R alto = todos del mismo lado
+
 acceptors:
   ALA: [O]
   GLY: [O]

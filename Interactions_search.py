@@ -179,11 +179,14 @@ def carga_variables():
     Angle_Hidrogen_Bonds_Max = float(Interaciones['angulos']['Angle_Hidrogen_Bonds_Max'])
     Ring_Planarity_RMSD_Max = float(Interaciones['aromaticidad']['Ring_Planarity_RMSD_Max'])
 
+    Pocket_Min_Residues = int(Interaciones['pockets']['min_residues'])
+    Pocket_Coverage_Threshold = float(Interaciones['pockets']['coverage_threshold'])
+
     Aceptores_Prot = Interaciones['acceptors']
     Dadores_Prot = Interaciones['donors']
     Aceptot_antecedent = Interaciones['acceptors_antecedent']
     Special_case = Interaciones['special']
-    return(ligand_plot,vmd_output,cumulative_output,Distances_Hidrogen_Bonds,Distances_Aromatic,Distancia_Hidrofobica,Distancia_Centro_Activo,Angle_Hidrogen_Bonds_Min,Angle_Hidrogen_Bonds_Max,Ring_Planarity_RMSD_Max,Aceptores_Prot,Dadores_Prot,Aceptot_antecedent,Special_case)
+    return(ligand_plot,vmd_output,cumulative_output,Distances_Hidrogen_Bonds,Distances_Aromatic,Distancia_Hidrofobica,Distancia_Centro_Activo,Angle_Hidrogen_Bonds_Min,Angle_Hidrogen_Bonds_Max,Ring_Planarity_RMSD_Max,Pocket_Min_Residues,Pocket_Coverage_Threshold,Aceptores_Prot,Dadores_Prot,Aceptot_antecedent,Special_case)
 
 
 
@@ -449,14 +452,20 @@ def visualize_rings(mol, ring_data, Ligand_imput, folder):
         fh.write(drawer.GetDrawingText())
     
 
-def _vmd_write_interaction(VDM_TCL, j, chain, resid, resname, coord1, coord2, color):
+def _vmd_write_interaction(VDM_TCL, j, chain, resid, resname, coord1, coord2, color,
+                            mol_receptor='$molReceptor', mol_graphics='$molLigand'):
     """Escribe en el .tcl la línea punteada + etiqueta de distancia entre coord1 (ligando)
-    y coord2 (receptor) para una interacción. Común a aromatic/acceptor/donor."""
+    y coord2 (receptor) para una interacción. Común a aromatic/acceptor/donor.
+
+    mol_receptor/mol_graphics son variables Tcl (seteadas por el caller con [mol new ...])
+    en vez de molids fijos: si la sesión de VMD ya tenía moléculas cargadas antes de
+    correr este script, 'mol new' no asigna 0/1 sino los siguientes ids libres, y
+    hardcodear 0/'top' hace fallar 'atomselect'/'graphics' con 'invalid molecule'."""
     x1, y1, z1 = coord1
     x2, y2, z2 = coord2
-    VDM_TCL.write(f'graphics top color {color}\n')
-    VDM_TCL.write(f'graphics top line {{{x1} {y1} {z1}}} {{{x2} {y2} {z2}}} width 5 style dashed\n')
-    VDM_TCL.write(f'set Recptor{j} [atomselect 0 "chain {chain} and resid {resid} and resname {resname} and name CZ"]\n')
+    VDM_TCL.write(f'graphics {mol_graphics} color {color}\n')
+    VDM_TCL.write(f'graphics {mol_graphics} line {{{x1} {y1} {z1}}} {{{x2} {y2} {z2}}} width 5 style dashed\n')
+    VDM_TCL.write(f'set Recptor{j} [atomselect {mol_receptor} "chain {chain} and resid {resid} and resname {resname} and name CZ"]\n')
     VDM_TCL.write(f'set x1 {{{x1}}}\n')
     VDM_TCL.write(f'set y1 {{{y1}}}\n')
     VDM_TCL.write(f'set z1 {{{z1}}}\n')
@@ -470,8 +479,8 @@ def _vmd_write_interaction(VDM_TCL, j, chain, resid, resname, coord1, coord2, co
     VDM_TCL.write('set xm [expr {($x1 + $x2) / 2}]\n')
     VDM_TCL.write('set ym [expr {($y1 + $y2) / 2}]\n')
     VDM_TCL.write('set zm [expr {($z1 + $z2) / 2}]\n')
-    VDM_TCL.write('graphics top color white\n')
-    VDM_TCL.write('graphics top text [list $xm $ym $zm] [format "%.2f A" $distance]\n')
+    VDM_TCL.write(f'graphics {mol_graphics} color white\n')
+    VDM_TCL.write(f'graphics {mol_graphics} text [list $xm $ym $zm] [format "%.2f A" $distance]\n')
 
 
 _VMD_COLORS = {'aromatic': 'white', 'acceptor': 'red', 'donor': 'yellow'}
@@ -480,25 +489,44 @@ _VMD_COLORS = {'aromatic': 'white', 'acceptor': 'red', 'donor': 'yellow'}
 def scripting_vmd(DF_Interacciones,receptor_points,aromatic_lig_df,DF_Lig,Prot,chain,Lig,folder):
     receptor_name = Path(Prot).stem
     Lig_name = Path(Lig).stem
+    # Nombres de archivo (no la ruta original): analyze_pair ya copió ambos PDB a
+    # 'folder' antes de llamar a este script, y el .tcl queda guardado ahí mismo.
+    # Referenciar la ruta original rompe con --complex (usa un tmp_dir que se
+    # borra al terminar) y además hace el .tcl no portable si se mueve la carpeta.
+    Prot_file = Path(Prot).name
+    Lig_file  = Path(Lig).name
 
     Res_All = DF_Interacciones['Pos R'].tolist()
     residues = ' '.join(map(str, Res_All))
 
     with open(f'{folder}/vmd_{receptor_name}_{Lig_name}.tcl', 'w') as VDM_TCL:
-        # Cargar el archivo PDB
+        # Cargar el archivo PDB. Se captura el molid real en variables Tcl en vez de
+        # asumir 0/1: si la sesión de VMD ya tenía moléculas cargadas, 'mol new' no
+        # asigna esos ids y hardcodearlos rompe atomselect/graphics más abajo.
         VDM_TCL.write(f'display projection orthographic\n')
-        VDM_TCL.write(f'mol new "{Prot}"\n')
-        VDM_TCL.write(f'mol modselect 0 0 all\n')
-        VDM_TCL.write(f'mol modstyle 0 0 NewCartoon\n')
-        VDM_TCL.write(f'mol modcolor 0 0 ColorID 6\n')
-        VDM_TCL.write(f'mol modmaterial 0 0 Transparent\n')
-        VDM_TCL.write(f'mol addrep top\n')
-        VDM_TCL.write(f'mol modselect 1 top resid {residues} and chain {chain}\n')
-        VDM_TCL.write(f'mol modstyle 1 top Licorice\n')
-        VDM_TCL.write(f'mol new {Lig}\n')
+        VDM_TCL.write(f'set molReceptor [mol new "{Prot_file}"]\n')
+        VDM_TCL.write(f'mol modselect 0 $molReceptor all\n')
+        # Lines en vez de Tube/NewCartoon/Trace: en builds alpha de VMD (ej. 2.0.0a9)
+        # esas representaciones basadas en spline por backbone truncan la geometría
+        # a ~40 residuos sin avisar (bug confirmado: seleccionar explícitamente un
+        # tramo lejano no dibuja nada), sea cual sea la selección o la molécula.
+        # Lines no depende de ese cálculo (dibuja enlace por enlace) y siempre
+        # muestra la proteína completa.
+        VDM_TCL.write(f'mol modstyle 0 $molReceptor Lines 3\n')
+        VDM_TCL.write(f'mol modcolor 0 $molReceptor ColorID 6\n')
+        VDM_TCL.write(f'mol modmaterial 0 $molReceptor Opaque\n')
+        VDM_TCL.write(f'mol addrep $molReceptor\n')
+        VDM_TCL.write(f'mol modselect 1 $molReceptor resid {residues} and chain {chain}\n')
+        VDM_TCL.write(f'mol modstyle 1 $molReceptor Licorice\n')
+        VDM_TCL.write(f'set molLigand [mol new "{Lig_file}"]\n')
         # Crear una representación en Licorice para el ligando
-        VDM_TCL.write(f'mol addrep 1\n')
-        VDM_TCL.write(f'mol modstyle 0 1 Licorice\n')
+        VDM_TCL.write(f'mol addrep $molLigand\n')
+        VDM_TCL.write(f'mol modstyle 0 $molLigand Licorice\n')
+        # Sin esto la cámara queda encuadrada según la última molécula cargada (el
+        # ligando, mucho más chico) y no se reajusta tras cargar el receptor antes:
+        # recorta tramos enteros de la proteína por los planos de clipping. Al cargar
+        # manualmente por GUI, VMD hace resetview solo; en modo scripteado (-e) no.
+        VDM_TCL.write(f'display resetview\n')
 
         ### Busco Interaccion
         for j in range(0, DF_Interacciones.shape[0]):
@@ -536,22 +564,25 @@ def scripting_vmd_hydrophobic(DF_Interacciones, DF_Active_Site, DF_Lig_All, Prot
 
     receptor_name = Path(Prot).stem
     Lig_name = Path(Lig).stem
+    Prot_file = Path(Prot).name
+    Lig_file  = Path(Lig).name
 
     residues = ' '.join(map(str, DF_Hpho['Pos R'].tolist()))
 
     with open(f'{folder}/vmd_hydrophobic_{receptor_name}_{Lig_name}.tcl', 'w') as VDM_TCL:
         VDM_TCL.write(f'display projection orthographic\n')
-        VDM_TCL.write(f'mol new "{Prot}"\n')
-        VDM_TCL.write(f'mol modselect 0 0 all\n')
-        VDM_TCL.write(f'mol modstyle 0 0 NewCartoon\n')
-        VDM_TCL.write(f'mol modcolor 0 0 ColorID 6\n')
-        VDM_TCL.write(f'mol modmaterial 0 0 Transparent\n')
-        VDM_TCL.write(f'mol addrep top\n')
-        VDM_TCL.write(f'mol modselect 1 top resid {residues} and chain {chain}\n')
-        VDM_TCL.write(f'mol modstyle 1 top Licorice\n')
-        VDM_TCL.write(f'mol new {Lig}\n')
-        VDM_TCL.write(f'mol addrep 1\n')
-        VDM_TCL.write(f'mol modstyle 0 1 Licorice\n')
+        VDM_TCL.write(f'set molReceptor [mol new "{Prot_file}"]\n')
+        VDM_TCL.write(f'mol modselect 0 $molReceptor all\n')
+        VDM_TCL.write(f'mol modstyle 0 $molReceptor Lines 3\n')
+        VDM_TCL.write(f'mol modcolor 0 $molReceptor ColorID 6\n')
+        VDM_TCL.write(f'mol modmaterial 0 $molReceptor Opaque\n')
+        VDM_TCL.write(f'mol addrep $molReceptor\n')
+        VDM_TCL.write(f'mol modselect 1 $molReceptor resid {residues} and chain {chain}\n')
+        VDM_TCL.write(f'mol modstyle 1 $molReceptor Licorice\n')
+        VDM_TCL.write(f'set molLigand [mol new "{Lig_file}"]\n')
+        VDM_TCL.write(f'mol addrep $molLigand\n')
+        VDM_TCL.write(f'mol modstyle 0 $molLigand Licorice\n')
+        VDM_TCL.write(f'display resetview\n')
 
         for j, row in enumerate(DF_Hpho.itertuples(index=False)):
             rec_atoms = row.Atom.split(',')
@@ -778,6 +809,193 @@ def search_hydrophobic(mol, pdb_coords, DF_Active_Site, Distancia_Hidrofobica):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Pockets hidrofóbicos (agrupación multi-residuo por fragmento del ligando)
+# ──────────────────────────────────────────────────────────────────────────────
+
+_POCKET_SUMMARY_COLS = ['Pocket', 'Fragment_Atoms', 'N_Ligand_Atoms', 'Residues',
+                        'N_Residues', 'Coverage_R', 'Is_Pocket']
+_POCKET_DETAIL_COLS  = ['Pocket', 'Pos R', 'Res', 'Atom', 'Lig_Atom', 'Lig_Serial', 'Dist']
+_POCKET_COLORIDS     = [3, 9, 11, 4, 7, 10, 14, 17]  # orange, pink, purple2, yellow, green, cyan, ...
+
+
+def _ligand_hydrophobic_fragments(mol, hpho_idx):
+    """Componentes conexos por enlace (grafo de RDKit) dentro del set de átomos
+    hidrofóbicos del ligando: un anillo o cadena contigua contactada = un
+    fragmento. Se usa conectividad real, no cercanía espacial, para que 'mismo
+    fragmento del ligando' tenga sentido químico."""
+    idx_list = sorted(hpho_idx)
+    parent = {i: i for i in idx_list}
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    for bond in mol.GetBonds():
+        a, b = bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()
+        if a in hpho_idx and b in hpho_idx:
+            union(a, b)
+
+    fragments = {}
+    for i in idx_list:
+        fragments.setdefault(find(i), []).append(i)
+    return list(fragments.values())
+
+
+def search_hydrophobic_pockets(mol, pdb_coords, DF_Active_Site, Distancia_Hidrofobica,
+                                min_residues=3, coverage_threshold=0.5):
+    """Detecta pockets hidrofóbicos reales: fragmentos contiguos del ligando
+    (por conectividad) contactados por 3+ residuos distintos con buena
+    cobertura espacial alrededor del fragmento — consistente con sitios de
+    unión bien definidos en estructuras cristalográficas.
+
+    Cobertura (Coverage_R): módulo del vector resultante normalizado de las
+    direcciones residuo→fragmento (0 a 1). R bajo = los residuos rodean el
+    fragmento desde varias direcciones (pocket real). R alto (cercano a 1) =
+    todos los residuos del mismo lado (contacto superficial, no un pocket
+    envolvente), aunque haya 3+ residuos.
+
+    Retorna (df_summary, df_detail): df_summary tiene una fila por fragmento
+    candidato (pase o no el filtro); df_detail solo tiene los contactos
+    átomo-residuo de los fragmentos que sí califican como pocket (Is_Pocket
+    == 'Yes'), para alimentar la visualización VMD."""
+    pattern  = Chem.MolFromSmarts(_HPHO_LIG_SMARTS)
+    hpho_idx = {i for match in mol.GetSubstructMatches(pattern) for i in match}
+    if not hpho_idx:
+        return pd.DataFrame(columns=_POCKET_SUMMARY_COLS), pd.DataFrame(columns=_POCKET_DETAIL_COLS)
+
+    rec_mask = DF_Active_Site.apply(
+        lambda r: r['Atom'] in _HYDROPHOBIC_ATOMS.get(r['Residue'], set()), axis=1)
+    rec_rows = DF_Active_Site[rec_mask]
+    if rec_rows.empty:
+        return pd.DataFrame(columns=_POCKET_SUMMARY_COLS), pd.DataFrame(columns=_POCKET_DETAIL_COLS)
+    rec_coords = np.array(rec_rows[['X', 'Y', 'Z']], dtype=float)
+
+    # Contactos átomo(ligando)-átomo(receptor) crudos, sin colapsar por residuo
+    raw_contacts = []  # (lig_atom_idx, lig_serial, lig_name, dist, rec_row_index)
+    for i in hpho_idx:
+        if i >= len(pdb_coords):
+            continue
+        lig_serial, lig_name = pdb_coords[i][0], pdb_coords[i][1]
+        lig_xyz = np.array([pdb_coords[i][5], pdb_coords[i][6], pdb_coords[i][7]], dtype=float)
+        dists = np.linalg.norm(rec_coords - lig_xyz, axis=1)
+        for k in np.where(dists < Distancia_Hidrofobica)[0]:
+            raw_contacts.append((i, lig_serial, lig_name, float(dists[k]), rec_rows.index[k]))
+
+    if not raw_contacts:
+        return pd.DataFrame(columns=_POCKET_SUMMARY_COLS), pd.DataFrame(columns=_POCKET_DETAIL_COLS)
+
+    fragments = _ligand_hydrophobic_fragments(mol, hpho_idx)
+
+    summary_rows, detail_rows = [], []
+    for pocket_n, frag_atoms in enumerate(fragments, start=1):
+        frag_set = set(frag_atoms)
+        frag_contacts = [c for c in raw_contacts if c[0] in frag_set]
+        if not frag_contacts:
+            continue
+
+        residues = {}  # Pos -> {'Residue': str, 'xyz': [[x,y,z], ...]}
+        contacted_lig_atoms = set()
+        for lig_idx, lig_serial, lig_name, dist, rec_idx in frag_contacts:
+            rec_row = rec_rows.loc[rec_idx]
+            pos = int(rec_row['Pos'])
+            residues.setdefault(pos, {'Residue': rec_row['Residue'], 'xyz': []})
+            residues[pos]['xyz'].append([rec_row['X'], rec_row['Y'], rec_row['Z']])
+            contacted_lig_atoms.add(lig_idx)
+
+        n_residues = len(residues)
+        if n_residues < min_residues:
+            continue
+
+        frag_xyz = np.array([[pdb_coords[i][5], pdb_coords[i][6], pdb_coords[i][7]]
+                             for i in contacted_lig_atoms], dtype=float)
+        frag_center = frag_xyz.mean(axis=0)
+
+        vectors = []
+        for pos, info in residues.items():
+            res_center = np.mean(info['xyz'], axis=0)
+            v = res_center - frag_center
+            norm = np.linalg.norm(v)
+            if norm > 1e-6:
+                vectors.append(v / norm)
+        resultant = float(np.linalg.norm(np.sum(vectors, axis=0)) / len(vectors)) if vectors else 1.0
+        is_pocket = (n_residues >= min_residues) and (resultant < coverage_threshold)
+
+        residues_str    = ','.join(f"{info['Residue']}{pos}" for pos, info in sorted(residues.items()))
+        frag_atoms_str  = ','.join(sorted({pdb_coords[i][1] for i in frag_atoms if i < len(pdb_coords)}))
+
+        summary_rows.append([pocket_n, frag_atoms_str, len(contacted_lig_atoms),
+                             residues_str, n_residues, round(resultant, 3),
+                             'Yes' if is_pocket else 'No'])
+
+        if is_pocket:
+            for lig_idx, lig_serial, lig_name, dist, rec_idx in frag_contacts:
+                rec_row = rec_rows.loc[rec_idx]
+                detail_rows.append([pocket_n, int(rec_row['Pos']), rec_row['Residue'], rec_row['Atom'],
+                                    lig_name, lig_serial, round(dist, 3)])
+
+    df_summary = pd.DataFrame(summary_rows, columns=_POCKET_SUMMARY_COLS) if summary_rows \
+        else pd.DataFrame(columns=_POCKET_SUMMARY_COLS)
+    df_detail  = pd.DataFrame(detail_rows, columns=_POCKET_DETAIL_COLS) if detail_rows \
+        else pd.DataFrame(columns=_POCKET_DETAIL_COLS)
+    return df_summary, df_detail
+
+
+def scripting_vmd_pockets(df_detail, Prot, chain, Lig, folder):
+    """Genera un .tcl de VMD con una representación de superficie (Surf/MSMS)
+    por cada pocket hidrofóbico validado, para visualizar la cavidad que
+    envuelve al fragmento del ligando.
+
+    NOTA VMD: el estilo de dibujo Wireframe/Solid Surface/Points de Surf y MSMS
+    no es scripteable vía 'mol modstyle' (solo acepta probe radius y
+    resolución); hay que cambiarlo a mano en Graphics > Representations >
+    Draw style > Wireframe para cada representación agregada por este script."""
+    if df_detail.empty:
+        return
+
+    receptor_name = Path(Prot).stem
+    Lig_name = Path(Lig).stem
+    Prot_file = Path(Prot).name
+    Lig_file  = Path(Lig).name
+
+    with open(f'{folder}/vmd_pockets_{receptor_name}_{Lig_name}.tcl', 'w') as VDM_TCL:
+        # molid real en variable Tcl (ver nota en scripting_vmd): evita romper si la
+        # sesión de VMD ya tenía moléculas cargadas antes de correr este script.
+        VDM_TCL.write('display projection orthographic\n')
+        VDM_TCL.write(f'set molReceptor [mol new "{Prot_file}"]\n')
+        VDM_TCL.write('mol modselect 0 $molReceptor all\n')
+        VDM_TCL.write('mol modstyle 0 $molReceptor Lines 3\n')
+        VDM_TCL.write('mol modcolor 0 $molReceptor ColorID 6\n')
+        VDM_TCL.write('mol modmaterial 0 $molReceptor Opaque\n')
+
+        VDM_TCL.write('\n# --- Pockets hidrofobicos: superficie Surf por pocket ---\n')
+        VDM_TCL.write('# Cambiar a mano "Draw style" -> Wireframe en Graphics > Representations\n')
+        VDM_TCL.write('# para cada representacion Surf agregada abajo.\n')
+        rep = 1
+        for pocket_n in sorted(df_detail['Pocket'].unique()):
+            sub = df_detail[df_detail['Pocket'] == pocket_n]
+            residues = ' '.join(sorted({str(p) for p in sub['Pos R']}))
+            colorid  = _POCKET_COLORIDS[(int(pocket_n) - 1) % len(_POCKET_COLORIDS)]
+            VDM_TCL.write('mol addrep $molReceptor\n')
+            VDM_TCL.write(f'mol modselect {rep} $molReceptor "resid {residues} and chain {chain}"\n')
+            VDM_TCL.write(f'mol modstyle {rep} $molReceptor Surf 1.4 0\n')
+            VDM_TCL.write(f'mol modcolor {rep} $molReceptor ColorID {colorid}\n')
+            VDM_TCL.write(f'mol modmaterial {rep} $molReceptor Opaque\n')
+            rep += 1
+
+        VDM_TCL.write(f'\nset molLigand [mol new "{Lig_file}"]\n')
+        VDM_TCL.write('mol addrep $molLigand\n')
+        VDM_TCL.write('mol modstyle 0 $molLigand Licorice\n')
+        VDM_TCL.write('display resetview\n')
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Puentes salinos
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -867,11 +1085,14 @@ def _append_cumulative_csv(row, filename):
     pd.DataFrame([row]).to_csv(path, mode='a', header=not path.exists(), index=False)
 
 
-def print_summary(receptor, ligand, DF_validated):
+def print_summary(receptor, ligand, DF_validated, df_pockets_summary=None):
     bar = '═' * 76
     print(f'\n{bar}')
     print(f'  Receptor : {Path(receptor).stem}')
     print(f'  Ligand   : {Path(ligand).stem}')
+    if df_pockets_summary is not None:
+        n_pockets = int((df_pockets_summary['Is_Pocket'] == 'Yes').sum()) if not df_pockets_summary.empty else 0
+        print(f'  Hydrophobic pockets     : {n_pockets}')
     print(f'  Validated interactions  : {len(DF_validated)}')
     if DF_validated.empty:
         print('  (none)')
@@ -909,6 +1130,8 @@ def analyze_pair(receptor_pdb, Ligand_imput, chain_receptor, cfg):
     Angle_Hidrogen_Bonds_Min = cfg['Angle_Hidrogen_Bonds_Min']
     Angle_Hidrogen_Bonds_Max = cfg['Angle_Hidrogen_Bonds_Max']
     Ring_Planarity_RMSD_Max = cfg['Ring_Planarity_RMSD_Max']
+    Pocket_Min_Residues   = cfg['Pocket_Min_Residues']
+    Pocket_Coverage_Threshold = cfg['Pocket_Coverage_Threshold']
     Aceptores_Prot        = cfg['Aceptores_Prot']
     Dadores_Prot          = cfg['Dadores_Prot']
     Aceptot_antecedent    = cfg['Aceptot_antecedent']
@@ -993,6 +1216,9 @@ def analyze_pair(receptor_pdb, Ligand_imput, chain_receptor, cfg):
     df_hpho = search_hydrophobic(mol, pdb_coords, DF_Active_Site, Distancia_Hidrofobica)
     df_salt = search_salt_bridges(mol, pdb_coords, DF_Active_Site)
     df_pica = search_pi_cation(DF_Active_Site, aromatic_lig_df)
+    df_pocket_summary, df_pocket_detail = search_hydrophobic_pockets(
+        mol, pdb_coords, DF_Active_Site, Distancia_Hidrofobica,
+        Pocket_Min_Residues, Pocket_Coverage_Threshold)
     # Frames vacíos (sin matches) no tienen dtypes declarados (columns=_DF_COLS sin data);
     # concatenarlos junto con DF_Interacciones (tipado) dispara el FutureWarning de pandas
     # sobre inferencia de dtype sobre columnas vacías/all-NA. Se excluyen antes de concatenar.
@@ -1058,6 +1284,8 @@ def analyze_pair(receptor_pdb, Ligand_imput, chain_receptor, cfg):
     DF_true = DF_Interacciones[DF_Interacciones['Interaction'] == 'Yes']
     DF_true.drop(columns=['LigID']).to_csv(f'{folder}/Interaction_{receptor}_{ligand}_true.csv')
 
+    df_pocket_summary.to_csv(f'{folder}/Pockets_{receptor}_{ligand}.csv', index=False)
+
     shutil.copy(Ligand_imput, f'{folder}/{Path(Ligand_imput).name}')
     shutil.copy(receptor_pdb, f'{folder}/{Path(receptor_pdb).name}')
 
@@ -1066,8 +1294,9 @@ def analyze_pair(receptor_pdb, Ligand_imput, chain_receptor, cfg):
                       receptor_pdb, chain_receptor, Ligand_imput, folder)
         scripting_vmd_hydrophobic(DF_true, DF_Active_Site, DF_Lig_All,
                                   receptor_pdb, chain_receptor, Ligand_imput, folder)
+        scripting_vmd_pockets(df_pocket_detail, receptor_pdb, chain_receptor, Ligand_imput, folder)
 
-    print_summary(receptor_pdb, Ligand_imput, DF_true)
+    print_summary(receptor_pdb, Ligand_imput, DF_true, df_pocket_summary)
 
     # ── Resumen del par (dentro de la carpeta) ────────────────────
     counts_dist = dict(DF_dist['Type'].value_counts())
@@ -1165,7 +1394,8 @@ def main():
     # ── Cargar configuración una sola vez ─────────────────────────
     (ligand_plot, vmd_output, cumulative_output, Distances_Hidrogen_Bonds, Distances_Aromatic,
      Distancia_Hidrofobica, Distancia_Centro_Activo, Angle_Hidrogen_Bonds_Min,
-     Angle_Hidrogen_Bonds_Max, Ring_Planarity_RMSD_Max, Aceptores_Prot, Dadores_Prot,
+     Angle_Hidrogen_Bonds_Max, Ring_Planarity_RMSD_Max, Pocket_Min_Residues,
+     Pocket_Coverage_Threshold, Aceptores_Prot, Dadores_Prot,
      Aceptot_antecedent, Special_case) = carga_variables()
 
     cfg = {
@@ -1179,6 +1409,8 @@ def main():
         'Angle_Hidrogen_Bonds_Min': Angle_Hidrogen_Bonds_Min,
         'Angle_Hidrogen_Bonds_Max': Angle_Hidrogen_Bonds_Max,
         'Ring_Planarity_RMSD_Max':  Ring_Planarity_RMSD_Max,
+        'Pocket_Min_Residues':      Pocket_Min_Residues,
+        'Pocket_Coverage_Threshold': Pocket_Coverage_Threshold,
         'Aceptores_Prot':           Aceptores_Prot,
         'Dadores_Prot':             Dadores_Prot,
         'Aceptot_antecedent':       Aceptot_antecedent,
