@@ -1307,6 +1307,8 @@ def analyze_pair(receptor_pdb, Ligand_imput, chain_receptor, cfg):
     for t in _ALL_TYPES:
         dat[f'dist_{t}'] = counts_dist.get(t, 0)
         dat[f'true_{t}'] = counts_true.get(t, 0)
+    dat['pocket_hydrophobic'] = int((df_pocket_summary['Is_Pocket'] == 'Yes').sum()) \
+        if not df_pocket_summary.empty else 0
     pd.DataFrame([dat]).to_csv(f'{folder}/summary.csv', index=False)
 
     pd.DataFrame([{'Receptor': receptor, 'Ligand': ligand,
