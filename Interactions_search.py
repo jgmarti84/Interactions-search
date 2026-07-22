@@ -1058,14 +1058,14 @@ def analyze_pair(receptor_pdb, Ligand_imput, chain_receptor, cfg):
     DF_true = DF_Interacciones[DF_Interacciones['Interaction'] == 'Yes']
     DF_true.drop(columns=['LigID']).to_csv(f'{folder}/Interaction_{receptor}_{ligand}_true.csv')
 
+    shutil.copy(Ligand_imput, f'{folder}/{Path(Ligand_imput).name}')
+    shutil.copy(receptor_pdb, f'{folder}/{Path(receptor_pdb).name}')
+
     if vmd_output == 'Yes':
         scripting_vmd(DF_true, receptor_points, aromatic_lig_df, DF_Lig,
                       receptor_pdb, chain_receptor, Ligand_imput, folder)
         scripting_vmd_hydrophobic(DF_true, DF_Active_Site, DF_Lig_All,
                                   receptor_pdb, chain_receptor, Ligand_imput, folder)
-
-    shutil.copy(Ligand_imput, f'{folder}/{Path(Ligand_imput).name}')
-    shutil.copy(receptor_pdb, f'{folder}/{Path(receptor_pdb).name}')
 
     print_summary(receptor_pdb, Ligand_imput, DF_true)
 
@@ -1096,7 +1096,7 @@ def analyze_pair(receptor_pdb, Ligand_imput, chain_receptor, cfg):
 #### Busqueda de interacciones ####
 
 
-if __name__ == '__main__':
+def main():
 
     parser = argparse.ArgumentParser(
         description='Análisis de interacciones proteína-ligando.',
@@ -1209,4 +1209,6 @@ if __name__ == '__main__':
 
     print(f"\nAnalysis complete: {n_ok} pair(s) processed, {n_skip} skipped.")
 
-    
+
+if __name__ == '__main__':
+    main()

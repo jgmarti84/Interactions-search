@@ -1,0 +1,19 @@
+REMARK Minimal receptor for interactions-search smoke tests. Two residues, chain A.
+REMARK ALA 10: backbone N at (-2.5, 0, 0) is 2.5 Ang from ligand O1 — H-bond donor.
+REMARK LEU 20: CB at (6, 0, 0) is 3.4 Ang from ligand C2; CB/CG within 4 Ang of C3.
+REMARK Limitation: no aromatic or charged groups; no explicit H atoms.
+ATOM      1  N   ALA A  10      -2.500   0.000   0.000  1.00  0.00           N
+ATOM      2  CA  ALA A  10      -1.100   1.000   0.000  1.00  0.00           C
+ATOM      3  C   ALA A  10      -0.500   2.200   0.000  1.00  0.00           C
+ATOM      4  O   ALA A  10       0.700   2.700   0.000  1.00  0.00           O
+ATOM      5  CB  ALA A  10      -2.000   2.300   0.000  1.00  0.00           C
+ATOM      6  N   LEU A  20       4.500  -2.000   0.000  1.00  0.00           N
+ATOM      7  CA  LEU A  20       4.500  -0.500   0.000  1.00  0.00           C
+ATOM      8  C   LEU A  20       3.500   0.500   0.000  1.00  0.00           C
+ATOM      9  O   LEU A  20       3.000   0.500   1.200  1.00  0.00           O
+ATOM     10  CB  LEU A  20       6.000   0.000   0.000  1.00  0.00           C
+ATOM     11  CG  LEU A  20       7.000   1.000   0.000  1.00  0.00           C
+ATOM     12  CD1 LEU A  20       7.500   1.500   1.200  1.00  0.00           C
+ATOM     13  CD2 LEU A  20       7.500   1.500  -1.200  1.00  0.00           C
+TER      14      LEU A  20
+END

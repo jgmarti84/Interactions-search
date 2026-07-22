@@ -1,0 +1,14 @@
+REMARK Minimal ligand for interactions-search smoke tests.
+REMARK Residue name: LIG, chain A, residue 1.
+REMARK O1 at (0,0,0) — H-bond acceptor [O;H1] — 2.5 Ang from receptor ALA N.
+REMARK C2, C3 — hydrophobic carbons — within 4 Ang of receptor LEU CB/CG.
+REMARK Limitation: no aromatic rings, no charged groups, no donor-only atoms.
+HETATM    1  O1  LIG A   1       0.000   0.000   0.000  1.00  0.00           O
+HETATM    2  C1  LIG A   1       1.300   0.000   0.000  1.00  0.00           C
+HETATM    3  C2  LIG A   1       2.600   0.000   0.000  1.00  0.00           C
+HETATM    4  C3  LIG A   1       3.500   1.200   0.000  1.00  0.00           C
+CONECT    1    2
+CONECT    2    1    3
+CONECT    3    2    4
+CONECT    4    3
+END
