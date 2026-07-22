@@ -130,14 +130,21 @@ Complex PDB (optional)
     └── Hyd. / salt / π-cat:  validated by distance only
         │
         ▼
-[8] Outputs
+[8] Hydrophobic pocket detection  (search_hydrophobic_pockets, independent of step 7)
+    ├── Group ligand hydrophobic atoms into fragments by bond connectivity
+    ├── Per fragment, collect distinct contacting receptor residues (≥ Pocket_Min_Residues)
+    └── Score spatial coverage around the fragment (Coverage_R, see "Hydrophobic Pockets" below)
+        │
+        ▼
+[9] Outputs
     ├── CSV with all raw interactions
     ├── CSV filtered by distance
     ├── CSV filtered by distance + angle  (validated interactions)
-    ├── Console summary  (table of validated interactions)
+    ├── CSV of hydrophobic pocket candidates (Pockets_<rec>_<lig>.csv)
+    ├── Console summary  (table of validated interactions + pocket count)
     ├── Cumulative summary Interactions_close.csv
     ├── Centre of mass    CM_all.csv
-    └── TCL script for VMD (if vmd_output: Yes)
+    └── TCL scripts for VMD (if vmd_output: Yes)
 ```
 
 ---
@@ -205,7 +212,51 @@ acceptors_antecedent:  # antecedent atom of each acceptor (for angle calculation
 
 special:               # special cases (e.g. haem group)
   HEM: [FE, 1.59]
+
+pockets:
+  min_residues:        3     # minimum distinct residues contacting the same ligand fragment
+  coverage_threshold:  0.5   # max Coverage_R (0-1) to qualify as an enclosing pocket
 ```
+
+---
+
+## Hydrophobic Pockets
+
+A single hydrophobic contact (one residue, one ligand atom) doesn't tell you whether the
+ligand sits in a real, enclosing binding pocket, or just brushes past a residue on one
+side. `search_hydrophobic_pockets()` (in `Interactions_search.py`) answers that question
+with two independent criteria, both must hold:
+
+1. **Multiple residues on the same ligand fragment.** Ligand hydrophobic atoms (matched by
+   the same SMARTS used for `hydrophobic` contacts, `_HPHO_LIG_SMARTS`) are grouped into
+   *fragments* by **bond connectivity** (RDKit's bond graph), not spatial proximity — a ring
+   or a contiguous aliphatic chain that is contacted counts as one fragment. For each
+   fragment, every receptor residue with at least one apolar atom within
+   `Distances_Hidrofobica` Å of any atom in that fragment is collected. The fragment
+   qualifies only if it has **≥ `min_residues`** distinct contacting residues (default 3).
+
+2. **Spatial coverage around the fragment.** Having 3+ residues touching the same fragment
+   isn't enough on its own — they could all be sitting on the same face of the ligand
+   (a flat, superficial contact) rather than wrapping around it. `Coverage_R` measures this:
+   for each contacting residue, take the unit vector from the fragment's centroid to that
+   residue's centroid, then compute the magnitude of the **average of those unit vectors**.
+
+   ```
+   Coverage_R = | Σ unit_vectors | / n_residues        (0 ≤ Coverage_R ≤ 1)
+   ```
+
+   - **Coverage_R ≈ 0** — the vectors point in different directions and cancel out:
+     residues surround the fragment from multiple sides → a real, enclosing pocket,
+     consistent with well-defined binding sites seen in crystal structures.
+   - **Coverage_R ≈ 1** — the vectors mostly point the same way: all residues are on
+     the same side → a superficial contact, not an enclosing pocket, even with 3+ residues.
+
+   A fragment is marked `Is_Pocket = Yes` only if `n_residues ≥ min_residues` **and**
+   `Coverage_R < coverage_threshold` (default 0.5).
+
+This runs independently of the per-contact `Interaction == Yes` validation in step 7 — a
+fragment can have several individually-validated hydrophobic contacts and still fail the
+pocket criteria (e.g. only 2 residues), or vice versa.
 
 ---
 
@@ -218,8 +269,21 @@ special:               # special cases (e.g. haem group)
 | `<folder>/Interaction_<rec>_<lig>_all.csv` | All interactions found (no filters) |
 | `<folder>/Interaction_<rec>_<lig>_threshold.csv` | Filtered by distance |
 | `<folder>/Interaction_<rec>_<lig>_true.csv` | Validated by distance and angle |
+| `<folder>/Pockets_<rec>_<lig>.csv` | Hydrophobic pocket candidates (see "Hydrophobic Pockets" above), one row per ligand fragment |
 | `Interactions_close.csv` | Cumulative run summary, one row per pair (same content as `summary.csv`, including per-type counts) — requires `cumulative_output: 'Yes'` |
 | `CM_all.csv` | Ligand centre of mass, one row per pair — requires `cumulative_output: 'Yes'` |
+
+`Pockets_<rec>_<lig>.csv` columns:
+
+| Column | Description |
+|---|---|
+| `Pocket` | Fragment id (arbitrary, stable within the run) |
+| `Fragment_Atoms` | Ligand atom names in the fragment, comma-separated |
+| `N_Ligand_Atoms` | Number of ligand atoms in the fragment actually in contact |
+| `Residues` | Contacting receptor residues, e.g. `LEU63,VAL67,TYR129` |
+| `N_Residues` | Distinct contacting residue count |
+| `Coverage_R` | Spatial coverage score, 0–1 (see above); lower = more enclosing |
+| `Is_Pocket` | `Yes` / `No` — whether both criteria (`N_Residues` and `Coverage_R`) are met |
 
 Interaction CSV columns:
 
@@ -234,17 +298,29 @@ Interaction CSV columns:
 | `Angle` | Validation angle in degrees |
 | `Interaction` | `Yes` / `No` — whether distance and angle criteria are met |
 
-### VMD script (`vmd_<receptor>_<ligand>.tcl`)
+### VMD scripts (if `vmd_output: 'Yes'`)
 
-Generates a visualisation ready to load in VMD:
-- Full protein in transparent NewCartoon
-- Active site residues in Licorice
-- Ligand in Licorice
-- Dashed lines for each validated interaction:
-  - **White** — aromatic
-  - **Red** — ligand acceptor (receptor donor)
-  - **Yellow** — ligand donor (receptor acceptor)
-- Distance label in Ångströms over each line
+Three independent `.tcl` scripts are generated per pair, each self-contained (they load
+the PDB copies already saved in the same output folder, so the folder can be moved or run
+on a different machine without editing paths):
+
+| File | Content |
+|---|---|
+| `vmd_<rec>_<lig>.tcl` | Full protein + active site residues (Licorice) + ligand (Licorice); dashed lines with distance labels for each validated H-bond/aromatic interaction — **white** aromatic, **red** ligand-acceptor, **yellow** ligand-donor |
+| `vmd_hydrophobic_<rec>_<lig>.tcl` | Same base scene; dashed **orange** lines for each validated hydrophobic contact |
+| `vmd_pockets_<rec>_<lig>.tcl` | Same base scene; one `Surf` (MSMS) representation per qualifying pocket (`Is_Pocket == Yes`), colour-rotated per pocket, covering that pocket's contacting residues |
+
+The full protein is rendered with **Lines** (not `NewCartoon`/`Tube`/`Trace`): some VMD
+builds — notably early `2.0.0` alpha releases — silently truncate spline-based backbone
+representations to the first ~40 residues regardless of selection, a confirmed VMD bug
+unrelated to the input PDB. `Lines` draws bond-by-bond and is unaffected, so it's used as
+the reliable default; switch to `NewCartoon` manually in VMD's *Graphics > Representations*
+if your VMD build renders it correctly.
+
+`Surf`/`MSMS` in VMD doesn't expose a scriptable "Wireframe" draw style (only probe radius
+and resolution are settable via `mol modstyle`) — to see the pocket surface as a mesh
+instead of solid, change it manually: *Graphics > Representations* → select the pocket's
+`Surf` rep → *Draw style* → Wireframe/Points.
 
 ### Ligand PNG images (if `ligand_plot: Yes`)
 
@@ -270,9 +346,12 @@ Everything is stored inside a single folder per pair `<receptor>_<ligand>/`:
 ├── Interaction_*_all.csv      ← all interactions, no filter
 ├── Interaction_*_threshold.csv← filtered by distance
 ├── Interaction_*_true.csv     ← validated by distance + angle
+├── Pockets_*.csv              ← hydrophobic pocket candidates
 ├── summary.csv                ← interaction count by type
 ├── CM.csv                     ← ligand centre of mass
-├── vmd_*.tcl                  ← VMD script (if vmd_output: Yes)
+├── vmd_*.tcl                  ← main VMD script (H-bonds/aromatic) (if vmd_output: Yes)
+├── vmd_hydrophobic_*.tcl      ← hydrophobic contacts VMD script (if vmd_output: Yes)
+├── vmd_pockets_*.tcl          ← hydrophobic pockets VMD script (if vmd_output: Yes)
 ├── *_acceptors.png            ← ligand with acceptors highlighted
 ├── *_donors.png               ← ligand with donors highlighted
 └── *_aromatic.png             ← ligand with aromatic rings highlighted
