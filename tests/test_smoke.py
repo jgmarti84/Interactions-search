@@ -25,7 +25,8 @@ CUMULATIVE_FILES = [
     REPO_ROOT / "CM_all.csv",
 ]
 
-EXPECTED_COLUMNS = ["Pos R", "Res", "Atom", "Dist", "Lig", "Type", "Angle", "Interaction"]
+EXPECTED_COLUMNS = ["Pos R", "Res", "Atom", "Dist", "Lig", "Type", "Angle",
+                    "X", "Y", "Z", "Interaction"]
 
 
 def _cleanup():

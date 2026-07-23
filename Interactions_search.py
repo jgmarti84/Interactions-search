@@ -16,6 +16,11 @@ import math
 import argparse
 import os
 import shutil
+from scipy.spatial import ConvexHull, QhullError
+import matplotlib
+matplotlib.use('Agg')  # headless: sin esto matplotlib puede requerir un $DISPLAY inexistente en servidores
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 
 
 # Función para obtener las coordenadas 2D de los átomos
@@ -170,6 +175,8 @@ def carga_variables(config_path=None):
         cfg.options.cumulative_output,
         cfg.options.interaction_coord,
         cfg.options.volume_plot,
+        cfg.options.bias,
+        cfg.options.bias_validated_only,
         cfg.distancias.Distances_Hidrogen_Bonds,
         cfg.distancias.Distances_Aromatic,
         cfg.distancias.Distances_Hidrofobica,
@@ -179,6 +186,7 @@ def carga_variables(config_path=None):
         cfg.aromaticidad.Ring_Planarity_RMSD_Max,
         cfg.pockets.min_residues,
         cfg.pockets.coverage_threshold,
+        cfg.pockets.density_radius,
         cfg.acceptors,
         cfg.donors,
         cfg.acceptors_antecedent,
@@ -306,11 +314,95 @@ def residuos_contacto(Receptor_Caso,Lig_Caso,receptor_points,DF_Lig,DF_Interacci
     return(DF_Interacciones)
 
 def generate_df_ligand(pdb_coords):
-    
+
     columns = ['Atom ID', 'Element', 'Residue Name', 'Chain ID', 'Residue Number', 'X', 'Y', 'Z']
     df_ligand = pd.DataFrame(pdb_coords, columns=columns)
 
     return(df_ligand)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Bias probe file (.bpf) para GOLD
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Vset/r fijos por tipo, tomados de receptor_fs(6).bpf (referencia de formato
+# provista) — no varían por átomo, son la misma convención para todo don/acc/aro.
+_BPF_PARAMS = {
+    'don': {'Vset': -2.72, 'r': 1.20},
+    'acc': {'Vset': -2.28, 'r': 0.80},
+    'aro': {'Vset': -2.00, 'r': 2.00},
+}
+
+
+def _collect_bias_points(DF_Lig, DF_true=None):
+    """Junta los puntos de bias (un punto por átomo aceptor/donor, un punto
+    por anillo aromático en su centroide) en el mismo orden que usan
+    export_bpf() y export_bpf_pdb(), para que ambos archivos queden
+    alineados fila a fila.
+
+    Si DF_true es None (default): usa TODOS los hot-points químicos del
+    ligando (search_hot_points/search_rings), sin importar si esa posición
+    llegó a formar una interacción real con el receptor en esta pose.
+
+    Si se pasa DF_true (interacciones validadas, Interaction == 'Yes'): se
+    restringe a los hot-points que sí participan en una interacción validada
+    — átomos aceptor/donor por serial (LigID) y anillos por su etiqueta
+    ('aromatic' o 'pi_cation', ambos indican que el anillo hace contacto
+    real). 'Evidence-based' en vez de 'todo lo químicamente posible'."""
+    donors    = DF_Lig[DF_Lig['Caso'] == 'donor']
+    acceptors = DF_Lig[DF_Lig['Caso'] == 'acceptor']
+    aromatic  = DF_Lig[DF_Lig['Caso'].astype(str).str.startswith('aromatic')]
+
+    if DF_true is not None:
+        validated_ligids = set(
+            DF_true.loc[DF_true['Type'].isin(['acceptor', 'donor']), 'LigID'].dropna().astype(int))
+        donors    = donors[donors['Atom ID'].astype(int).isin(validated_ligids)]
+        acceptors = acceptors[acceptors['Atom ID'].astype(int).isin(validated_ligids)]
+        validated_rings = set(DF_true.loc[DF_true['Type'].isin(['aromatic', 'pi_cation']), 'Lig'])
+        aromatic  = aromatic[aromatic['Caso'].isin(validated_rings)]
+
+    rows = []
+    for _, r in donors.iterrows():
+        rows.append((float(r['Coord X']), float(r['Coord Y']), float(r['Coord Z']), 'don'))
+    for _, r in acceptors.iterrows():
+        rows.append((float(r['Coord X']), float(r['Coord Y']), float(r['Coord Z']), 'acc'))
+    for _, group in aromatic.groupby('Caso'):
+        center = group[['Coord X', 'Coord Y', 'Coord Z']].astype(float).mean(axis=0)
+        rows.append((float(center['Coord X']), float(center['Coord Y']), float(center['Coord Z']), 'aro'))
+    return rows
+
+
+def export_bpf(DF_Lig, filepath, DF_true=None):
+    """Genera un archivo .bpf (bias probe file, formato GOLD: header 'x y z
+    Vset r type') a partir de los hot-points del ligando (ver
+    _collect_bias_points; DF_true filtra a solo los validados). Vset y r son
+    fijos por tipo (_BPF_PARAMS)."""
+    rows = _collect_bias_points(DF_Lig, DF_true)
+    with open(filepath, 'w') as f:
+        f.write('x\ty\tz\tVset\tr\ttype\n')
+        for x, y, z, tipo in rows:
+            p = _BPF_PARAMS[tipo]
+            f.write(f"{x:.3f}\t{y:.3f}\t{z:.3f}\t{p['Vset']}\t{p['r']}\t{tipo}\n")
+
+
+_BPF_RESNAME = {'don': 'DON', 'acc': 'ACC', 'aro': 'ARO'}
+
+
+def export_bpf_pdb(DF_Lig, filepath, DF_true=None):
+    """PDB 'dummy' con un átomo H por punto de bias (mismos puntos y mismo
+    orden que export_bpf; DF_true filtra a solo los validados), para poder
+    cargar y visualizar los puntos de bias en VMD junto al receptor/ligando.
+    resname = DON/ACC/ARO según el tipo, chain 'X', un residuo por átomo
+    (dummy, sin significado bioquímico)."""
+    rows = _collect_bias_points(DF_Lig, DF_true)
+    with open(filepath, 'w') as f:
+        for i, (x, y, z, tipo) in enumerate(rows, start=1):
+            resname = _BPF_RESNAME[tipo]
+            f.write(
+                f"ATOM  {i:>5} {'H':<4} {resname:>3} X{i:>4}    "
+                f"{x:8.3f}{y:8.3f}{z:8.3f}{1.00:6.2f}{0.00:6.2f}          {'H':>2}\n"
+            )
+        f.write('END\n')
 
 
 
@@ -483,6 +575,36 @@ def _vmd_write_interaction(VDM_TCL, j, chain, resid, resname, coord1, coord2, co
 _VMD_COLORS = {'aromatic': 'white', 'acceptor': 'red', 'donor': 'yellow'}
 
 
+def _write_hbond_aromatic_lines(VDM_TCL, DF_Interacciones, receptor_points, DF_Lig, chain):
+    """Escribe las líneas punteadas + etiquetas de distancia de cada interacción
+    H-bond/aromática de DF_Interacciones. Compartido por scripting_vmd() y
+    scripting_vmd_combined() para no duplicar la lógica de lookup de coordenadas."""
+    # Acceso por nombre de columna (no por posición): DF_Interacciones puede
+    # traer X/Y/Z insertadas en medio del esquema original (ver
+    # add_interaction_coords), lo que corre las posiciones fijas de columna.
+    for j in range(0, DF_Interacciones.shape[0]):
+        row     = DF_Interacciones.iloc[j]
+        tipo    = row['Type']
+        Recept  = row['Pos R']
+        Resname = row['Res']
+
+        if tipo == 'aromatic':
+            Coord2 = np.array(receptor_points[(receptor_points['Pos'] == Recept) &
+                                               (receptor_points['Atom'] == 'center')][['X','Y','Z']])[0]
+            anillo = row['Lig']
+            punto_dado = np.array(DF_Lig.query('Caso == @anillo')[['Coord X' , 'Coord Y' , 'Coord Z']])
+            Coord1 = np.mean(punto_dado, axis=0)
+        elif tipo in ('acceptor', 'donor'):
+            Coord2 = np.array(receptor_points[(receptor_points['Pos'] == Recept) &
+                                               (receptor_points['Atom'] == row['Atom'])][['X','Y','Z']])[0]
+            atomo_id = row['LigID']
+            Coord1 = np.array(DF_Lig[(DF_Lig['Atom ID'] == atomo_id)][['Coord X' , 'Coord Y' , 'Coord Z']])[0]
+        else:
+            continue
+
+        _vmd_write_interaction(VDM_TCL, j, chain, Recept, Resname, Coord1, Coord2, _VMD_COLORS[tipo])
+
+
 def scripting_vmd(DF_Interacciones,receptor_points,aromatic_lig_df,DF_Lig,Prot,chain,Lig,folder):
     receptor_name = Path(Prot).stem
     Lig_name = Path(Lig).stem
@@ -526,26 +648,7 @@ def scripting_vmd(DF_Interacciones,receptor_points,aromatic_lig_df,DF_Lig,Prot,c
         VDM_TCL.write(f'display resetview\n')
 
         ### Busco Interaccion
-        for j in range(0, DF_Interacciones.shape[0]):
-            tipo    = DF_Interacciones.iloc[j, 5]
-            Recept  = DF_Interacciones.iloc[j, 0]
-            Resname = DF_Interacciones.iloc[j, 1]
-
-            if tipo == 'aromatic':
-                Coord2 = np.array(receptor_points[(receptor_points['Pos'] == Recept) &
-                                                   (receptor_points['Atom'] == 'center')][['X','Y','Z']])[0]
-                anillo = DF_Interacciones.iloc[j, 4]
-                punto_dado = np.array(DF_Lig.query('Caso == @anillo')[['Coord X' , 'Coord Y' , 'Coord Z']])
-                Coord1 = np.mean(punto_dado, axis=0)
-            elif tipo in ('acceptor', 'donor'):
-                Coord2 = np.array(receptor_points[(receptor_points['Pos'] == Recept) &
-                                                   (receptor_points['Atom'] == DF_Interacciones.iloc[j,2])][['X','Y','Z']])[0]
-                atomo_id = DF_Interacciones.iloc[j, 8]
-                Coord1 = np.array(DF_Lig[(DF_Lig['Atom ID'] == atomo_id)][['Coord X' , 'Coord Y' , 'Coord Z']])[0]
-            else:
-                continue
-
-            _vmd_write_interaction(VDM_TCL, j, chain, Recept, Resname, Coord1, Coord2, _VMD_COLORS[tipo])
+        _write_hbond_aromatic_lines(VDM_TCL, DF_Interacciones, receptor_points, DF_Lig, chain)
 
 
 _VMD_HYDROPHOBIC_COLOR = 'orange'
@@ -735,6 +838,69 @@ def validate_inputs(receptor_pdb, ligand_pdb, chain):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Volumen (envolvente convexa) — compartido entre sitio activo y pockets
+# ──────────────────────────────────────────────────────────────────────────────
+
+def convex_hull_volume(points):
+    """Volumen (Å³) de la envolvente convexa de 'points' (array Nx3) vía
+    scipy.spatial.ConvexHull. Retorna (nan, None) si hay menos de 4 puntos o si
+    son coplanares/degenerados (QhullError) — no se puede definir un volumen 3D."""
+    if len(points) < 4:
+        return np.nan, None
+    try:
+        hull = ConvexHull(points)
+        return round(float(hull.volume), 2), hull
+    except QhullError:
+        return np.nan, None
+
+
+def plot_hull_volume(points, hull, title, filename):
+    """PNG de dispersión 3D: todos los puntos (negro) y los vértices de su
+    envolvente convexa (rojo), con el volumen en el título."""
+    vertices = points[hull.vertices]
+    fig = plt.figure()
+    ax = fig.add_subplot(projection='3d')
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+    ax.set_title(title)
+    ax.scatter(points[:, 0], points[:, 1], points[:, 2], marker='.', color='black')
+    ax.scatter(vertices[:, 0], vertices[:, 1], vertices[:, 2], marker='x', color='red')
+    fig.savefig(filename, dpi=200)
+    plt.close(fig)
+
+
+def plot_hull_surface(points, hull, title, filename):
+    """PNG de superficie 3D sólida de la envolvente convexa: cada cara
+    triangular del hull (hull.simplices) coloreada según su altura promedio
+    (colormap viridis) — vista tipo malla sólida, complementaria a
+    plot_hull_volume() (dispersión de puntos + vértices)."""
+    faces = points[hull.simplices]  # (n_faces, 3, 3)
+    face_z = faces[:, :, 2].mean(axis=1)
+    norm = plt.Normalize(face_z.min(), face_z.max()) if face_z.max() > face_z.min() \
+        else plt.Normalize(face_z.min() - 1, face_z.max() + 1)
+    colors = plt.cm.viridis(norm(face_z))
+
+    fig = plt.figure()
+    ax = fig.add_subplot(projection='3d')
+    poly = Poly3DCollection(faces, facecolors=colors, edgecolor='k', linewidths=0.3, alpha=0.95)
+    ax.add_collection3d(poly)
+
+    # add_collection3d no autoescala los límites de los ejes: hay que fijarlos
+    # a mano con el bounding box de los puntos, si no el plot queda vacío.
+    mins, maxs = points.min(axis=0), points.max(axis=0)
+    ax.set_xlim(mins[0], maxs[0])
+    ax.set_ylim(mins[1], maxs[1])
+    ax.set_zlim(mins[2], maxs[2])
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+    ax.set_title(title)
+    fig.savefig(filename, dpi=200)
+    plt.close(fig)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Interacciones hidrofóbicas
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -810,7 +976,8 @@ def search_hydrophobic(mol, pdb_coords, DF_Active_Site, Distancia_Hidrofobica):
 # ──────────────────────────────────────────────────────────────────────────────
 
 _POCKET_SUMMARY_COLS = ['Pocket', 'Fragment_Atoms', 'N_Ligand_Atoms', 'Residues',
-                        'N_Residues', 'Coverage_R', 'Is_Pocket']
+                        'N_Residues', 'Coverage_R', 'Volume_A3', 'Density_Score',
+                        'Is_Pocket', 'X', 'Y', 'Z']
 _POCKET_DETAIL_COLS  = ['Pocket', 'Pos R', 'Res', 'Atom', 'Lig_Atom', 'Lig_Serial', 'Dist']
 _POCKET_COLORIDS     = [3, 9, 11, 4, 7, 10, 14, 17]  # orange, pink, purple2, yellow, green, cyan, ...
 
@@ -845,8 +1012,36 @@ def _ligand_hydrophobic_fragments(mol, hpho_idx):
     return list(fragments.values())
 
 
+def _hydrophobic_density_score(frag_contacts, pdb_coords, rec_rows, radius):
+    """Densidad hidrofóbica local (estilo fpocket, 'mean local hydrophobic
+    density'): cada contacto átomo(ligando)-átomo(receptor) del fragmento se
+    representa por su punto medio; para cada punto medio se cuenta cuántos
+    otros puntos medios del mismo fragmento caen dentro de 'radius' Å, y se
+    devuelve el promedio de esos conteos.
+
+    Es una métrica distinta de Coverage_R (dirección de los residuos) y de
+    Volume_A3 (tamaño de la cavidad que los envuelve): mide qué tan apretados
+    están los contactos átomo-átomo entre sí. Dos fragmentos con el mismo
+    Coverage_R y Volume_A3 pueden tener un encaje hidrofóbico apretado (muchos
+    contactos cercanos entre sí → score alto) o disperso dentro de la misma
+    cavidad (score bajo). 0.0 si hay menos de 2 contactos (no hay par de
+    puntos para medir distancia)."""
+    if len(frag_contacts) < 2:
+        return 0.0
+    midpoints = []
+    for lig_idx, lig_serial, lig_name, dist, rec_idx in frag_contacts:
+        lig_xyz = np.array([pdb_coords[lig_idx][5], pdb_coords[lig_idx][6], pdb_coords[lig_idx][7]],
+                           dtype=float)
+        rec_xyz = rec_rows.loc[rec_idx][['X', 'Y', 'Z']].values.astype(float)
+        midpoints.append((lig_xyz + rec_xyz) / 2)
+    midpoints = np.array(midpoints)
+    dist_matrix = np.linalg.norm(midpoints[:, None, :] - midpoints[None, :, :], axis=-1)
+    np.fill_diagonal(dist_matrix, np.inf)
+    return round(float((dist_matrix < radius).sum(axis=1).mean()), 3)
+
+
 def search_hydrophobic_pockets(mol, pdb_coords, DF_Active_Site, Distancia_Hidrofobica,
-                                min_residues=3, coverage_threshold=0.5):
+                                min_residues=3, coverage_threshold=0.5, density_radius=5.0):
     """Detecta pockets hidrofóbicos reales: fragmentos contiguos del ligando
     (por conectividad) contactados por 3+ residuos distintos con buena
     cobertura espacial alrededor del fragmento — consistente con sitios de
@@ -858,20 +1053,29 @@ def search_hydrophobic_pockets(mol, pdb_coords, DF_Active_Site, Distancia_Hidrof
     todos los residuos del mismo lado (contacto superficial, no un pocket
     envolvente), aunque haya 3+ residuos.
 
-    Retorna (df_summary, df_detail): df_summary tiene una fila por fragmento
-    candidato (pase o no el filtro); df_detail solo tiene los contactos
-    átomo-residuo de los fragmentos que sí califican como pocket (Is_Pocket
-    == 'Yes'), para alimentar la visualización VMD."""
+    Retorna (df_summary, df_detail, pocket_hulls): df_summary tiene una fila por
+    fragmento candidato (pase o no el filtro), con X/Y/Z = centroide de los
+    átomos del ligando efectivamente en contacto (frag_center, usado también
+    para Coverage_R), Volume_A3 = volumen (Å³) de la envolvente convexa
+    (ConvexHull) de todos los átomos de los residuos que contactan el pocket
+    (NaN si hay menos de 4 átomos o si son coplanares/degenerados), y
+    Density_Score = densidad hidrofóbica local estilo fpocket, ver
+    _hydrophobic_density_score (0.0 si el fragmento tiene < 2 contactos);
+    df_detail solo tiene los contactos átomo-residuo de los fragmentos que sí
+    califican como pocket (Is_Pocket == 'Yes'), para alimentar la visualización VMD;
+    pocket_hulls es {pocket_n: (points, ConvexHull)} para los pockets con
+    volumen calculable, reutilizado por plot_hull_volume() para no volver a
+    correr Qhull."""
     pattern  = Chem.MolFromSmarts(_HPHO_LIG_SMARTS)
     hpho_idx = {i for match in mol.GetSubstructMatches(pattern) for i in match}
     if not hpho_idx:
-        return pd.DataFrame(columns=_POCKET_SUMMARY_COLS), pd.DataFrame(columns=_POCKET_DETAIL_COLS)
+        return pd.DataFrame(columns=_POCKET_SUMMARY_COLS), pd.DataFrame(columns=_POCKET_DETAIL_COLS), {}
 
     rec_mask = DF_Active_Site.apply(
         lambda r: r['Atom'] in _HYDROPHOBIC_ATOMS.get(r['Residue'], set()), axis=1)
     rec_rows = DF_Active_Site[rec_mask]
     if rec_rows.empty:
-        return pd.DataFrame(columns=_POCKET_SUMMARY_COLS), pd.DataFrame(columns=_POCKET_DETAIL_COLS)
+        return pd.DataFrame(columns=_POCKET_SUMMARY_COLS), pd.DataFrame(columns=_POCKET_DETAIL_COLS), {}
     rec_coords = np.array(rec_rows[['X', 'Y', 'Z']], dtype=float)
 
     # Contactos átomo(ligando)-átomo(receptor) crudos, sin colapsar por residuo
@@ -886,11 +1090,12 @@ def search_hydrophobic_pockets(mol, pdb_coords, DF_Active_Site, Distancia_Hidrof
             raw_contacts.append((i, lig_serial, lig_name, float(dists[k]), rec_rows.index[k]))
 
     if not raw_contacts:
-        return pd.DataFrame(columns=_POCKET_SUMMARY_COLS), pd.DataFrame(columns=_POCKET_DETAIL_COLS)
+        return pd.DataFrame(columns=_POCKET_SUMMARY_COLS), pd.DataFrame(columns=_POCKET_DETAIL_COLS), {}
 
     fragments = _ligand_hydrophobic_fragments(mol, hpho_idx)
 
     summary_rows, detail_rows = [], []
+    pocket_hulls = {}
     for pocket_n, frag_atoms in enumerate(fragments, start=1):
         frag_set = set(frag_atoms)
         frag_contacts = [c for c in raw_contacts if c[0] in frag_set]
@@ -927,9 +1132,20 @@ def search_hydrophobic_pockets(mol, pdb_coords, DF_Active_Site, Distancia_Hidrof
         residues_str    = ','.join(f"{info['Residue']}{pos}" for pos, info in sorted(residues.items()))
         frag_atoms_str  = ','.join(sorted({pdb_coords[i][1] for i in frag_atoms if i < len(pdb_coords)}))
 
+        # Volumen: envolvente convexa de TODOS los átomos de los residuos que
+        # contactan (no solo los apolares) — el mismo conjunto de átomos que
+        # scripting_vmd_pockets selecciona para la representación Surf.
+        pocket_points = DF_Active_Site[DF_Active_Site['Pos'].isin(residues.keys())][['X', 'Y', 'Z']] \
+            .values.astype(float)
+        volume, hull = convex_hull_volume(pocket_points)
+        if hull is not None:
+            pocket_hulls[pocket_n] = (pocket_points, hull)
+
+        density = _hydrophobic_density_score(frag_contacts, pdb_coords, rec_rows, density_radius)
+
         summary_rows.append([pocket_n, frag_atoms_str, len(contacted_lig_atoms),
-                             residues_str, n_residues, round(resultant, 3),
-                             'Yes' if is_pocket else 'No'])
+                             residues_str, n_residues, round(resultant, 3), volume, density,
+                             'Yes' if is_pocket else 'No', *np.round(frag_center, 3)])
 
         if is_pocket:
             for lig_idx, lig_serial, lig_name, dist, rec_idx in frag_contacts:
@@ -941,7 +1157,7 @@ def search_hydrophobic_pockets(mol, pdb_coords, DF_Active_Site, Distancia_Hidrof
         else pd.DataFrame(columns=_POCKET_SUMMARY_COLS)
     df_detail  = pd.DataFrame(detail_rows, columns=_POCKET_DETAIL_COLS) if detail_rows \
         else pd.DataFrame(columns=_POCKET_DETAIL_COLS)
-    return df_summary, df_detail
+    return df_summary, df_detail, pocket_hulls
 
 
 def scripting_vmd_pockets(df_detail, Prot, chain, Lig, folder):
@@ -992,6 +1208,58 @@ def scripting_vmd_pockets(df_detail, Prot, chain, Lig, folder):
         VDM_TCL.write('display resetview\n')
 
 
+def scripting_vmd_combined(DF_Interacciones, receptor_points, DF_Lig, df_pocket_detail,
+                            Prot, chain, Lig, folder):
+    """Una sola escena de VMD con todo junto: H-bonds y aromáticas (líneas
+    punteadas, igual que scripting_vmd) + superficie Surf por pocket
+    hidrofóbico validado (igual que scripting_vmd_pockets) — para no tener que
+    cargar dos .tcl por separado y comparar a ojo. No incluye las líneas
+    hidrofóbicas individuales de scripting_vmd_hydrophobic (la superficie del
+    pocket ya representa esa región; agregarlas encima satura la escena)."""
+    receptor_name = Path(Prot).stem
+    Lig_name = Path(Lig).stem
+    Prot_file = Path(Prot).name
+    Lig_file  = Path(Lig).name
+
+    Res_All = DF_Interacciones['Pos R'].tolist()
+    residues = ' '.join(map(str, Res_All))
+
+    with open(f'{folder}/vmd_combined_{receptor_name}_{Lig_name}.tcl', 'w') as VDM_TCL:
+        VDM_TCL.write('display projection orthographic\n')
+        VDM_TCL.write(f'set molReceptor [mol new "{Prot_file}"]\n')
+        VDM_TCL.write('mol modselect 0 $molReceptor all\n')
+        VDM_TCL.write('mol modstyle 0 $molReceptor Lines 3\n')
+        VDM_TCL.write('mol modcolor 0 $molReceptor ColorID 6\n')
+        VDM_TCL.write('mol modmaterial 0 $molReceptor Opaque\n')
+        VDM_TCL.write('mol addrep $molReceptor\n')
+        VDM_TCL.write(f'mol modselect 1 $molReceptor resid {residues} and chain {chain}\n')
+        VDM_TCL.write('mol modstyle 1 $molReceptor Licorice\n')
+
+        rep = 2
+        if not df_pocket_detail.empty:
+            VDM_TCL.write('\n# --- Pockets hidrofobicos: superficie Surf por pocket ---\n')
+            VDM_TCL.write('# Cambiar a mano "Draw style" -> Wireframe en Graphics > Representations\n')
+            VDM_TCL.write('# para cada representacion Surf agregada abajo.\n')
+            for pocket_n in sorted(df_pocket_detail['Pocket'].unique()):
+                sub = df_pocket_detail[df_pocket_detail['Pocket'] == pocket_n]
+                pocket_residues = ' '.join(sorted({str(p) for p in sub['Pos R']}))
+                colorid = _POCKET_COLORIDS[(int(pocket_n) - 1) % len(_POCKET_COLORIDS)]
+                VDM_TCL.write('mol addrep $molReceptor\n')
+                VDM_TCL.write(f'mol modselect {rep} $molReceptor "resid {pocket_residues} and chain {chain}"\n')
+                VDM_TCL.write(f'mol modstyle {rep} $molReceptor Surf 1.4 0\n')
+                VDM_TCL.write(f'mol modcolor {rep} $molReceptor ColorID {colorid}\n')
+                VDM_TCL.write(f'mol modmaterial {rep} $molReceptor Opaque\n')
+                rep += 1
+
+        VDM_TCL.write(f'\nset molLigand [mol new "{Lig_file}"]\n')
+        VDM_TCL.write('mol addrep $molLigand\n')
+        VDM_TCL.write('mol modstyle 0 $molLigand Licorice\n')
+        VDM_TCL.write('display resetview\n')
+
+        VDM_TCL.write('\n# --- Interacciones H-bond / aromaticas ---\n')
+        _write_hbond_aromatic_lines(VDM_TCL, DF_Interacciones, receptor_points, DF_Lig, chain)
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Puentes salinos
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1013,7 +1281,10 @@ def search_salt_bridges(mol, pdb_coords, DF_Active_Site):
             if pat:
                 for match in mol.GetSubstructMatches(pat):
                     idx.update(match)
-        return [(pdb_coords[i][1], pdb_coords[i][5], pdb_coords[i][6], pdb_coords[i][7])
+        # Se conserva el serial (pdb_coords[i][0]) además del nombre: el nombre
+        # puede repetirse en el ligando, y sin el serial no hay forma de volver
+        # a ubicar la coordenada exacta del átomo (ej. para add_interaction_coords).
+        return [(pdb_coords[i][0], pdb_coords[i][1], pdb_coords[i][5], pdb_coords[i][6], pdb_coords[i][7])
                 for i in idx if i < len(pdb_coords)]
 
     cation_lig = _lig_pts(_CATION_LIG_SMARTS)
@@ -1023,17 +1294,17 @@ def search_salt_bridges(mol, pdb_coords, DF_Active_Site):
     for rec in DF_Active_Site.itertuples(index=False):
         rc = np.array([rec.X, rec.Y, rec.Z])
         if rec.Atom in _SALT_NEG_ATOMS.get(rec.Residue, set()):
-            for atom, x, y, z in cation_lig:
+            for serial, atom, x, y, z in cation_lig:
                 d = np.linalg.norm(rc - np.array([x, y, z]))
                 if d < _SALT_DIST:
                     results.append([rec.Pos, rec.Residue, rec.Atom, round(d,3),
-                                     atom, 'salt_bridge', 0.0, 'Yes', np.nan])
+                                     atom, 'salt_bridge', 0.0, 'Yes', serial])
         if rec.Atom in _SALT_POS_ATOMS.get(rec.Residue, set()):
-            for atom, x, y, z in anion_lig:
+            for serial, atom, x, y, z in anion_lig:
                 d = np.linalg.norm(rc - np.array([x, y, z]))
                 if d < _SALT_DIST:
                     results.append([rec.Pos, rec.Residue, rec.Atom, round(d,3),
-                                     atom, 'salt_bridge', 0.0, 'Yes', np.nan])
+                                     atom, 'salt_bridge', 0.0, 'Yes', serial])
     return pd.DataFrame(results, columns=_DF_COLS) if results else pd.DataFrame(columns=_DF_COLS)
 
 
@@ -1059,6 +1330,78 @@ def search_pi_cation(DF_Active_Site, aromatic_lig_df):
                     results.append([rec.Pos, rec.Residue, rec.Atom, round(d,3),
                                      cas, 'pi_cation', 0.0, 'Yes', np.nan])
     return pd.DataFrame(results, columns=_DF_COLS) if results else pd.DataFrame(columns=_DF_COLS)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Coordenadas de las interacciones
+# ──────────────────────────────────────────────────────────────────────────────
+
+_COORD_SOURCES = {'receptor', 'ligand', 'center'}
+
+
+def add_interaction_coords(DF, receptor_points, DF_Lig, DF_Lig_All, DF_Active_Site, coord_source):
+    """Agrega columnas X, Y, Z a DF con la coordenada 3D de cada interacción,
+    según coord_source (options.interaction_coord en el YAML):
+      'receptor' -> átomo/centroide del receptor
+      'ligand'   -> átomo/centroide del ligando
+      'center'   -> punto medio entre ambos
+    'aromatic'/'pi_cation' usan el centroide del anillo (columna 'Lig' = 'Caso'
+    del anillo); el resto ubica el átomo puntual vía LigID (serial), no por
+    nombre, porque el nombre puede repetirse en el ligando. 'hydrophobic' puede
+    traer varios átomos del receptor colapsados en 'Atom' (ej. 'CD1,CD2,CG'); se
+    promedian. Filas cuyo átomo/anillo no se puede resolver quedan con X/Y/Z NaN."""
+    if coord_source not in _COORD_SOURCES:
+        raise ValueError(f"coord_source inválido: {coord_source!r} (usar {_COORD_SOURCES})")
+    need_rec = coord_source in ('receptor', 'center')
+    need_lig = coord_source in ('ligand', 'center')
+
+    xs, ys, zs = [], [], []
+    for _, r in DF.iterrows():
+        tipo, pos_r = r['Type'], r['Pos R']
+        rec_xyz = lig_xyz = None
+
+        if need_rec:
+            if tipo == 'aromatic':
+                sub = receptor_points[(receptor_points['Pos'] == pos_r) &
+                                       (receptor_points['Atom'] == 'center')]
+            else:
+                atoms = str(r['Atom']).split(',')
+                sub = DF_Active_Site[(DF_Active_Site['Pos'] == pos_r) &
+                                      (DF_Active_Site['Atom'].isin(atoms))]
+            if not sub.empty:
+                rec_xyz = sub[['X', 'Y', 'Z']].astype(float).mean(axis=0).values
+
+        if need_lig:
+            if tipo in ('aromatic', 'pi_cation'):
+                ring = DF_Lig[DF_Lig['Caso'] == r['Lig']]
+                if not ring.empty:
+                    lig_xyz = ring[['Coord X', 'Coord Y', 'Coord Z']].astype(float).mean(axis=0).values
+            else:
+                lig_row = DF_Lig_All[DF_Lig_All['Atom ID'] == r['LigID']]
+                if not lig_row.empty:
+                    lig_xyz = lig_row[['X', 'Y', 'Z']].astype(float).values[0]
+
+        if coord_source == 'receptor':
+            xyz = rec_xyz
+        elif coord_source == 'ligand':
+            xyz = lig_xyz
+        else:
+            xyz = (rec_xyz + lig_xyz) / 2 if rec_xyz is not None and lig_xyz is not None else None
+
+        if xyz is None:
+            xs.append(np.nan); ys.append(np.nan); zs.append(np.nan)
+        else:
+            xs.append(round(float(xyz[0]), 3))
+            ys.append(round(float(xyz[1]), 3))
+            zs.append(round(float(xyz[2]), 3))
+
+    DF = DF.copy()
+    DF['X'], DF['Y'], DF['Z'] = xs, ys, zs
+    # Reordenar: X,Y,Z entre 'Angle' e 'Interaction' (en vez de al final).
+    cols = [c for c in DF.columns if c not in ('X', 'Y', 'Z')]
+    insert_at = cols.index('Interaction')
+    cols[insert_at:insert_at] = ['X', 'Y', 'Z']
+    return DF[cols]
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1120,6 +1463,10 @@ def analyze_pair(receptor_pdb, Ligand_imput, chain_receptor, cfg):
     ligand_plot           = cfg['ligand_plot']
     vmd_output            = cfg['vmd_output']
     cumulative_output     = cfg['cumulative_output']
+    Interaction_Coord_Source = cfg['Interaction_Coord_Source']
+    Volume_Plot           = cfg['Volume_Plot']
+    Bias                  = cfg['Bias']
+    Bias_Validated_Only   = cfg['Bias_Validated_Only']
     Distances_Hidrogen_Bonds = cfg['Distances_Hidrogen_Bonds']
     Distances_Aromatic    = cfg['Distances_Aromatic']
     Distancia_Hidrofobica = cfg['Distancia_Hidrofobica']
@@ -1129,6 +1476,7 @@ def analyze_pair(receptor_pdb, Ligand_imput, chain_receptor, cfg):
     Ring_Planarity_RMSD_Max = cfg['Ring_Planarity_RMSD_Max']
     Pocket_Min_Residues   = cfg['Pocket_Min_Residues']
     Pocket_Coverage_Threshold = cfg['Pocket_Coverage_Threshold']
+    Pocket_Density_Radius = cfg['Pocket_Density_Radius']
     Aceptores_Prot        = cfg['Aceptores_Prot']
     Dadores_Prot          = cfg['Dadores_Prot']
     Aceptot_antecedent    = cfg['Aceptot_antecedent']
@@ -1172,7 +1520,12 @@ def analyze_pair(receptor_pdb, Ligand_imput, chain_receptor, cfg):
         coordenadas.append([p[1], p[5], p[6], p[7], 'donor', p[0]])
     DF_Lig = pd.DataFrame(coordenadas,
                           columns=['Átomo', 'Coord X', 'Coord Y', 'Coord Z', 'Caso', 'Atom ID'])
-    DF_Lig = pd.concat([DF_Lig, DF_Aro], ignore_index=True)
+    # Frames vacíos (sin aceptores/donores o sin anillos) no tienen dtypes declarados
+    # (mismo caso que la concatenación de tipos de interacción más abajo): concatenarlos
+    # igual dispara el FutureWarning de pandas sobre inferencia de dtype en columnas
+    # vacías/all-NA. Se excluyen antes de concatenar.
+    lig_frames = [f for f in (DF_Lig, DF_Aro) if not f.empty]
+    DF_Lig = pd.concat(lig_frames, ignore_index=True) if lig_frames else DF_Lig
 
     # ── Receptor: sitio activo ────────────────────────────────────
     pdb_parser = PDBParser(QUIET=True)
@@ -1180,6 +1533,10 @@ def analyze_pair(receptor_pdb, Ligand_imput, chain_receptor, cfg):
     DF_Active_Site = active_site_residues(structure, CM, chain_receptor,
                                            Distancia_Centro_Activo, ligand)
     receptor_points = Coordenadas_interes_receptor(Aceptores_Prot, Dadores_Prot, DF_Active_Site)
+
+    # Volumen del sitio activo completo (envolvente convexa de todos sus átomos),
+    # independiente del volumen por pocket hidrofóbico calculado más abajo.
+    Site_Volume, site_hull = convex_hull_volume(DF_Active_Site[['X', 'Y', 'Z']].values.astype(float))
 
     # ── DataFrame de interacciones ────────────────────────────────
     DF_Interacciones = pd.DataFrame({c: pd.Series(dtype=t) for c, t in [
@@ -1213,9 +1570,9 @@ def analyze_pair(receptor_pdb, Ligand_imput, chain_receptor, cfg):
     df_hpho = search_hydrophobic(mol, pdb_coords, DF_Active_Site, Distancia_Hidrofobica)
     df_salt = search_salt_bridges(mol, pdb_coords, DF_Active_Site)
     df_pica = search_pi_cation(DF_Active_Site, aromatic_lig_df)
-    df_pocket_summary, df_pocket_detail = search_hydrophobic_pockets(
+    df_pocket_summary, df_pocket_detail, pocket_hulls = search_hydrophobic_pockets(
         mol, pdb_coords, DF_Active_Site, Distancia_Hidrofobica,
-        Pocket_Min_Residues, Pocket_Coverage_Threshold)
+        Pocket_Min_Residues, Pocket_Coverage_Threshold, Pocket_Density_Radius)
     # Frames vacíos (sin matches) no tienen dtypes declarados (columns=_DF_COLS sin data);
     # concatenarlos junto con DF_Interacciones (tipado) dispara el FutureWarning de pandas
     # sobre inferencia de dtype sobre columnas vacías/all-NA. Se excluyen antes de concatenar.
@@ -1273,15 +1630,48 @@ def analyze_pair(receptor_pdb, Ligand_imput, chain_receptor, cfg):
 
     DF_Interacciones = DF_Interacciones.drop_duplicates()
 
+    # ── Coordenadas X,Y,Z (receptor/ligand/center según config) ────
+    # Se agrega antes de partir en all/threshold/true para que las tres salidas
+    # compartan exactamente las mismas columnas. Necesita LigID (se descarta recién
+    # al escribir cada CSV, más abajo).
+    DF_Interacciones = add_interaction_coords(DF_Interacciones, receptor_points, DF_Lig,
+                                              DF_Lig_All, DF_Active_Site, Interaction_Coord_Source)
+
     # ── Salidas CSV ───────────────────────────────────────────────
-    # LigID (serial de átomo, uso interno) se excluye de los CSV para no cambiar el esquema.
+    # LigID (serial de átomo, uso interno) se excluye de los CSV; X/Y/Z sí quedan.
     DF_Interacciones.drop(columns=['LigID']).to_csv(f'{folder}/Interaction_{receptor}_{ligand}_all.csv')
     DF_dist = DF_Interacciones[DF_Interacciones['Dist'] < Distances_Aromatic]
     DF_dist.drop(columns=['LigID']).to_csv(f'{folder}/Interaction_{receptor}_{ligand}_threshold.csv')
     DF_true = DF_Interacciones[DF_Interacciones['Interaction'] == 'Yes']
     DF_true.drop(columns=['LigID']).to_csv(f'{folder}/Interaction_{receptor}_{ligand}_true.csv')
 
+    if Bias == 'Yes':
+        bias_df_true = DF_true if Bias_Validated_Only == 'Yes' else None
+        export_bpf(DF_Lig, f'{folder}/{receptor}_{ligand}.bpf', bias_df_true)
+        export_bpf_pdb(DF_Lig, f'{folder}/{receptor}_{ligand}_bias.pdb', bias_df_true)
+
     df_pocket_summary.to_csv(f'{folder}/Pockets_{receptor}_{ligand}.csv', index=False)
+
+    if Volume_Plot == 'Yes':
+        if site_hull is not None:
+            site_points = DF_Active_Site[['X', 'Y', 'Z']].values.astype(float)
+            site_title  = f'Active site — {Site_Volume:.1f} Å³'
+            plot_hull_volume(site_points, site_hull, site_title,
+                             f'{folder}/ActiveSite_{receptor}_{ligand}_volume.png')
+            plot_hull_surface(site_points, site_hull, site_title,
+                              f'{folder}/ActiveSite_{receptor}_{ligand}_volume_solid.png')
+        if not df_pocket_summary.empty:
+            qualifying = df_pocket_summary[df_pocket_summary['Is_Pocket'] == 'Yes']
+            for _, prow in qualifying.iterrows():
+                hull_data = pocket_hulls.get(prow['Pocket'])
+                if hull_data is None:
+                    continue  # volumen no calculable (< 4 puntos o geometría degenerada)
+                points, hull = hull_data
+                pocket_title = f"Pocket {prow['Pocket']} — {prow['Volume_A3']:.1f} Å³"
+                plot_hull_volume(points, hull, pocket_title,
+                                 f"{folder}/Pocket_{prow['Pocket']}_{receptor}_{ligand}_volume.png")
+                plot_hull_surface(points, hull, pocket_title,
+                                  f"{folder}/Pocket_{prow['Pocket']}_{receptor}_{ligand}_volume_solid.png")
 
     shutil.copy(Ligand_imput, f'{folder}/{Path(Ligand_imput).name}')
     shutil.copy(receptor_pdb, f'{folder}/{Path(receptor_pdb).name}')
@@ -1292,6 +1682,8 @@ def analyze_pair(receptor_pdb, Ligand_imput, chain_receptor, cfg):
         scripting_vmd_hydrophobic(DF_true, DF_Active_Site, DF_Lig_All,
                                   receptor_pdb, chain_receptor, Ligand_imput, folder)
         scripting_vmd_pockets(df_pocket_detail, receptor_pdb, chain_receptor, Ligand_imput, folder)
+        scripting_vmd_combined(DF_true, receptor_points, DF_Lig, df_pocket_detail,
+                               receptor_pdb, chain_receptor, Ligand_imput, folder)
 
     print_summary(receptor_pdb, Ligand_imput, DF_true, df_pocket_summary)
 
@@ -1306,6 +1698,7 @@ def analyze_pair(receptor_pdb, Ligand_imput, chain_receptor, cfg):
         dat[f'true_{t}'] = counts_true.get(t, 0)
     dat['pocket_hydrophobic'] = int((df_pocket_summary['Is_Pocket'] == 'Yes').sum()) \
         if not df_pocket_summary.empty else 0
+    dat['ActiveSite_Volume_A3'] = Site_Volume
     pd.DataFrame([dat]).to_csv(f'{folder}/summary.csv', index=False)
 
     pd.DataFrame([{'Receptor': receptor, 'Ligand': ligand,
@@ -1394,11 +1787,11 @@ def main():
         pairs = [(args.receptor_pdb, lig) for lig in args.ligand_input]
 
     # ── Cargar configuración una sola vez ─────────────────────────
-    (ligand_plot, vmd_output, cumulative_output, Interaction_Coord_Source, Volume_Plot,
-     Distances_Hidrogen_Bonds, Distances_Aromatic,
+    (ligand_plot, vmd_output, cumulative_output, Interaction_Coord_Source, Volume_Plot, Bias,
+     Bias_Validated_Only, Distances_Hidrogen_Bonds, Distances_Aromatic,
      Distancia_Hidrofobica, Distancia_Centro_Activo, Angle_Hidrogen_Bonds_Min,
      Angle_Hidrogen_Bonds_Max, Ring_Planarity_RMSD_Max, Pocket_Min_Residues,
-     Pocket_Coverage_Threshold, Aceptores_Prot, Dadores_Prot,
+     Pocket_Coverage_Threshold, Pocket_Density_Radius, Aceptores_Prot, Dadores_Prot,
      Aceptot_antecedent, Special_case) = carga_variables(args.config)
 
     cfg = {
@@ -1407,6 +1800,8 @@ def main():
         'cumulative_output':        cumulative_output,
         'Interaction_Coord_Source': Interaction_Coord_Source,
         'Volume_Plot':              Volume_Plot,
+        'Bias':                     Bias,
+        'Bias_Validated_Only':      Bias_Validated_Only,
         'Distances_Hidrogen_Bonds': Distances_Hidrogen_Bonds,
         'Distances_Aromatic':       Distances_Aromatic,
         'Distancia_Hidrofobica':    Distancia_Hidrofobica,
@@ -1416,6 +1811,7 @@ def main():
         'Ring_Planarity_RMSD_Max':  Ring_Planarity_RMSD_Max,
         'Pocket_Min_Residues':      Pocket_Min_Residues,
         'Pocket_Coverage_Threshold': Pocket_Coverage_Threshold,
+        'Pocket_Density_Radius':    Pocket_Density_Radius,
         'Aceptores_Prot':           Aceptores_Prot,
         'Dadores_Prot':             Dadores_Prot,
         'Aceptot_antecedent':       Aceptot_antecedent,
