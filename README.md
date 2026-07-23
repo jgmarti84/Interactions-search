@@ -32,7 +32,7 @@ Installs the package in editable mode plus dev tools (pytest, ruff, mypy).
 If you only need to run the script without the package:
 
 ```bash
-pip install biopython rdkit pandas numpy pyyaml
+pip install biopython rdkit pandas numpy pyyaml scipy matplotlib
 python Interactions_search.py -r receptor.pdb -l ligand.pdb -c A
 ```
 
@@ -161,7 +161,8 @@ Complex PDB (optional)
 [8] Hydrophobic pocket detection  (search_hydrophobic_pockets, independent of step 7)
     ├── Group ligand hydrophobic atoms into fragments by bond connectivity
     ├── Per fragment, collect distinct contacting receptor residues (≥ Pocket_Min_Residues)
-    └── Score spatial coverage around the fragment (Coverage_R, see "Hydrophobic Pockets" below)
+    ├── Score spatial coverage around the fragment (Coverage_R, see "Hydrophobic Pockets" below)
+    └── Convex-hull volume of the contacting residues' atoms (Volume, scipy.spatial.ConvexHull)
         │
         ▼
 [9] Outputs
@@ -206,6 +207,8 @@ options:
   vmd_output:  'Yes'         # generates TCL script for VMD visualisation
   cumulative_output: 'Yes'   # appends each pair to Interactions_close.csv / CM_all.csv
   interaction_coord: 'center'  # X,Y,Z column added to Interaction_*.csv: 'receptor', 'ligand' or 'center' (midpoint)
+  volume_plot: 'Yes'         # generates a 3D scatter PNG (convex-hull volume) for the whole
+                              # active site and for each qualifying hydrophobic pocket (needs matplotlib)
 
 distancias:
   Distances_Hidrogen_Bonds: 3.2   # Å — H-bond threshold
@@ -283,6 +286,16 @@ with two independent criteria, both must hold:
    A fragment is marked `Is_Pocket = Yes` only if `n_residues ≥ min_residues` **and**
    `Coverage_R < coverage_threshold` (default 0.5).
 
+**Volume.** For every candidate fragment (pass or fail), `Volume` is the volume (Å³) of the
+convex hull (`scipy.spatial.ConvexHull`) of all atoms belonging to the contacting residues
+(the same atom set `vmd_pockets_*.tcl`'s `Surf` representation selects) — `NaN` if there
+are fewer than 4 atoms or the geometry is degenerate (coplanar points). This is separate
+from the whole active site's volume (`ActiveSite_Volume` in `summary.csv`), which is the
+convex hull of every atom in `DF_Active_Site` (all residues within `centroid_distance` Å of
+the ligand), independent of hydrophobic pockets. If `options.volume_plot: 'Yes'`, a 3D
+scatter PNG is generated for the active site and for each qualifying pocket
+(`Is_Pocket == Yes`): all atoms in black, convex-hull vertices in red.
+
 This runs independently of the per-contact `Interaction == Yes` validation in step 7 — a
 fragment can have several individually-validated hydrophobic contacts and still fail the
 pocket criteria (e.g. only 2 residues), or vice versa.
@@ -299,6 +312,8 @@ pocket criteria (e.g. only 2 residues), or vice versa.
 | `<folder>/Interaction_<rec>_<lig>_threshold.csv` | Filtered by distance |
 | `<folder>/Interaction_<rec>_<lig>_true.csv` | Validated by distance and angle |
 | `<folder>/Pockets_<rec>_<lig>.csv` | Hydrophobic pocket candidates (see "Hydrophobic Pockets" above), one row per ligand fragment |
+| `<folder>/ActiveSite_<rec>_<lig>_volume.png` | 3D scatter of the whole active site's atoms + convex-hull vertices (if `volume_plot: 'Yes'`) |
+| `<folder>/Pocket_<n>_<rec>_<lig>_volume.png` | 3D scatter of pocket `<n>`'s contacting atoms + convex-hull vertices (if `volume_plot: 'Yes'`, one per qualifying pocket) |
 | `Interactions_close.csv` | Cumulative run summary, one row per pair (same content as `summary.csv`, including per-type counts) — requires `cumulative_output: 'Yes'` |
 | `CM_all.csv` | Ligand centre of mass, one row per pair — requires `cumulative_output: 'Yes'` |
 
@@ -312,6 +327,7 @@ pocket criteria (e.g. only 2 residues), or vice versa.
 | `Residues` | Contacting receptor residues, e.g. `LEU63,VAL67,TYR129` |
 | `N_Residues` | Distinct contacting residue count |
 | `Coverage_R` | Spatial coverage score, 0–1 (see above); lower = more enclosing |
+| `Volume` | Convex-hull volume (Å³) of the contacting residues' atoms (see "Hydrophobic Pockets" above); `NaN` if not computable |
 | `Is_Pocket` | `Yes` / `No` — whether both criteria (`N_Residues` and `Coverage_R`) are met |
 | `X`, `Y`, `Z` | Centroid of the ligand fragment atoms actually in contact (the same centroid `Coverage_R` is computed around) |
 
@@ -378,6 +394,8 @@ Everything is stored inside a single folder per pair `<receptor>_<ligand>/`:
 ├── Interaction_*_threshold.csv← filtered by distance
 ├── Interaction_*_true.csv     ← validated by distance + angle
 ├── Pockets_*.csv              ← hydrophobic pocket candidates
+├── ActiveSite_*_volume.png    ← 3D scatter + convex hull of the whole active site (if volume_plot: Yes)
+├── Pocket_<n>_*_volume.png    ← 3D scatter + convex hull per qualifying pocket (if volume_plot: Yes)
 ├── summary.csv                ← interaction count by type
 ├── CM.csv                     ← ligand centre of mass
 ├── vmd_*.tcl                  ← main VMD script (H-bonds/aromatic) (if vmd_output: Yes)

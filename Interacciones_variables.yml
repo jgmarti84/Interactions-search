@@ -4,6 +4,9 @@ options:
   cumulative_output: 'Yes'   # agrega cada par receptor-ligando a Interactions_close.csv y CM_all.csv
   interaction_coord: 'center'   # coordenada X,Y,Z que se agrega a los CSV de interacciones
                                  # (_all/_threshold/_true): 'receptor', 'ligand' o 'center' (punto medio)
+  volume_plot: 'Yes'            # genera un PNG de dispersión 3D (átomos + vértices de la
+                                 # envolvente convexa) del sitio activo completo y de cada
+                                 # pocket hidrofóbico validado
 
 distancias:
   Distances_Hidrogen_Bonds: 3.2

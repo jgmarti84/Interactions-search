@@ -15,6 +15,10 @@ import math
 import argparse
 import os
 import shutil
+from scipy.spatial import ConvexHull, QhullError
+import matplotlib
+matplotlib.use('Agg')  # headless: sin esto matplotlib puede requerir un $DISPLAY inexistente en servidores
+import matplotlib.pyplot as plt
 
 
 # Función para obtener las coordenadas 2D de los átomos
@@ -175,6 +179,7 @@ def carga_variables():
         raise ValueError(
             f"options.interaction_coord inválido: {Interaction_Coord_Source!r} "
             "(usar 'receptor', 'ligand' o 'center')")
+    Volume_Plot = str(Interaciones['options'].get('volume_plot', 'Yes'))
 
     Distances_Hidrogen_Bonds =float(Interaciones['distancias']['Distances_Hidrogen_Bonds'])
     Distances_Aromatic = float(Interaciones['distancias']['Distances_Aromatic'])
@@ -191,7 +196,7 @@ def carga_variables():
     Dadores_Prot = Interaciones['donors']
     Aceptot_antecedent = Interaciones['acceptors_antecedent']
     Special_case = Interaciones['special']
-    return(ligand_plot,vmd_output,cumulative_output,Interaction_Coord_Source,Distances_Hidrogen_Bonds,Distances_Aromatic,Distancia_Hidrofobica,Distancia_Centro_Activo,Angle_Hidrogen_Bonds_Min,Angle_Hidrogen_Bonds_Max,Ring_Planarity_RMSD_Max,Pocket_Min_Residues,Pocket_Coverage_Threshold,Aceptores_Prot,Dadores_Prot,Aceptot_antecedent,Special_case)
+    return(ligand_plot,vmd_output,cumulative_output,Interaction_Coord_Source,Volume_Plot,Distances_Hidrogen_Bonds,Distances_Aromatic,Distancia_Hidrofobica,Distancia_Centro_Activo,Angle_Hidrogen_Bonds_Min,Angle_Hidrogen_Bonds_Max,Ring_Planarity_RMSD_Max,Pocket_Min_Residues,Pocket_Coverage_Threshold,Aceptores_Prot,Dadores_Prot,Aceptot_antecedent,Special_case)
 
 
 
@@ -747,6 +752,39 @@ def validate_inputs(receptor_pdb, ligand_pdb, chain):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Volumen (envolvente convexa) — compartido entre sitio activo y pockets
+# ──────────────────────────────────────────────────────────────────────────────
+
+def convex_hull_volume(points):
+    """Volumen (Å³) de la envolvente convexa de 'points' (array Nx3) vía
+    scipy.spatial.ConvexHull. Retorna (nan, None) si hay menos de 4 puntos o si
+    son coplanares/degenerados (QhullError) — no se puede definir un volumen 3D."""
+    if len(points) < 4:
+        return np.nan, None
+    try:
+        hull = ConvexHull(points)
+        return round(float(hull.volume), 2), hull
+    except QhullError:
+        return np.nan, None
+
+
+def plot_hull_volume(points, hull, title, filename):
+    """PNG de dispersión 3D: todos los puntos (negro) y los vértices de su
+    envolvente convexa (rojo), con el volumen en el título."""
+    vertices = points[hull.vertices]
+    fig = plt.figure()
+    ax = fig.add_subplot(projection='3d')
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel('Z')
+    ax.set_title(title)
+    ax.scatter(points[:, 0], points[:, 1], points[:, 2], marker='.', color='black')
+    ax.scatter(vertices[:, 0], vertices[:, 1], vertices[:, 2], marker='x', color='red')
+    fig.savefig(filename, dpi=200)
+    plt.close(fig)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Interacciones hidrofóbicas
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -822,7 +860,7 @@ def search_hydrophobic(mol, pdb_coords, DF_Active_Site, Distancia_Hidrofobica):
 # ──────────────────────────────────────────────────────────────────────────────
 
 _POCKET_SUMMARY_COLS = ['Pocket', 'Fragment_Atoms', 'N_Ligand_Atoms', 'Residues',
-                        'N_Residues', 'Coverage_R', 'Is_Pocket', 'X', 'Y', 'Z']
+                        'N_Residues', 'Coverage_R', 'Volume', 'Is_Pocket', 'X', 'Y', 'Z']
 _POCKET_DETAIL_COLS  = ['Pocket', 'Pos R', 'Res', 'Atom', 'Lig_Atom', 'Lig_Serial', 'Dist']
 _POCKET_COLORIDS     = [3, 9, 11, 4, 7, 10, 14, 17]  # orange, pink, purple2, yellow, green, cyan, ...
 
@@ -870,22 +908,27 @@ def search_hydrophobic_pockets(mol, pdb_coords, DF_Active_Site, Distancia_Hidrof
     todos los residuos del mismo lado (contacto superficial, no un pocket
     envolvente), aunque haya 3+ residuos.
 
-    Retorna (df_summary, df_detail): df_summary tiene una fila por fragmento
-    candidato (pase o no el filtro), con X/Y/Z = centroide de los átomos del
-    ligando efectivamente en contacto (frag_center, usado también para
-    Coverage_R); df_detail solo tiene los contactos átomo-residuo de los
-    fragmentos que sí califican como pocket (Is_Pocket == 'Yes'), para
-    alimentar la visualización VMD."""
+    Retorna (df_summary, df_detail, pocket_hulls): df_summary tiene una fila por
+    fragmento candidato (pase o no el filtro), con X/Y/Z = centroide de los
+    átomos del ligando efectivamente en contacto (frag_center, usado también
+    para Coverage_R) y Volume = volumen (Å³) de la envolvente convexa
+    (ConvexHull) de todos los átomos de los residuos que contactan el pocket
+    (NaN si hay menos de 4 átomos o si son coplanares/degenerados); df_detail
+    solo tiene los contactos átomo-residuo de los fragmentos que sí califican
+    como pocket (Is_Pocket == 'Yes'), para alimentar la visualización VMD;
+    pocket_hulls es {pocket_n: (points, ConvexHull)} para los pockets con
+    volumen calculable, reutilizado por plot_hull_volume() para no volver a
+    correr Qhull."""
     pattern  = Chem.MolFromSmarts(_HPHO_LIG_SMARTS)
     hpho_idx = {i for match in mol.GetSubstructMatches(pattern) for i in match}
     if not hpho_idx:
-        return pd.DataFrame(columns=_POCKET_SUMMARY_COLS), pd.DataFrame(columns=_POCKET_DETAIL_COLS)
+        return pd.DataFrame(columns=_POCKET_SUMMARY_COLS), pd.DataFrame(columns=_POCKET_DETAIL_COLS), {}
 
     rec_mask = DF_Active_Site.apply(
         lambda r: r['Atom'] in _HYDROPHOBIC_ATOMS.get(r['Residue'], set()), axis=1)
     rec_rows = DF_Active_Site[rec_mask]
     if rec_rows.empty:
-        return pd.DataFrame(columns=_POCKET_SUMMARY_COLS), pd.DataFrame(columns=_POCKET_DETAIL_COLS)
+        return pd.DataFrame(columns=_POCKET_SUMMARY_COLS), pd.DataFrame(columns=_POCKET_DETAIL_COLS), {}
     rec_coords = np.array(rec_rows[['X', 'Y', 'Z']], dtype=float)
 
     # Contactos átomo(ligando)-átomo(receptor) crudos, sin colapsar por residuo
@@ -900,11 +943,12 @@ def search_hydrophobic_pockets(mol, pdb_coords, DF_Active_Site, Distancia_Hidrof
             raw_contacts.append((i, lig_serial, lig_name, float(dists[k]), rec_rows.index[k]))
 
     if not raw_contacts:
-        return pd.DataFrame(columns=_POCKET_SUMMARY_COLS), pd.DataFrame(columns=_POCKET_DETAIL_COLS)
+        return pd.DataFrame(columns=_POCKET_SUMMARY_COLS), pd.DataFrame(columns=_POCKET_DETAIL_COLS), {}
 
     fragments = _ligand_hydrophobic_fragments(mol, hpho_idx)
 
     summary_rows, detail_rows = [], []
+    pocket_hulls = {}
     for pocket_n, frag_atoms in enumerate(fragments, start=1):
         frag_set = set(frag_atoms)
         frag_contacts = [c for c in raw_contacts if c[0] in frag_set]
@@ -941,8 +985,17 @@ def search_hydrophobic_pockets(mol, pdb_coords, DF_Active_Site, Distancia_Hidrof
         residues_str    = ','.join(f"{info['Residue']}{pos}" for pos, info in sorted(residues.items()))
         frag_atoms_str  = ','.join(sorted({pdb_coords[i][1] for i in frag_atoms if i < len(pdb_coords)}))
 
+        # Volumen: envolvente convexa de TODOS los átomos de los residuos que
+        # contactan (no solo los apolares) — el mismo conjunto de átomos que
+        # scripting_vmd_pockets selecciona para la representación Surf.
+        pocket_points = DF_Active_Site[DF_Active_Site['Pos'].isin(residues.keys())][['X', 'Y', 'Z']] \
+            .values.astype(float)
+        volume, hull = convex_hull_volume(pocket_points)
+        if hull is not None:
+            pocket_hulls[pocket_n] = (pocket_points, hull)
+
         summary_rows.append([pocket_n, frag_atoms_str, len(contacted_lig_atoms),
-                             residues_str, n_residues, round(resultant, 3),
+                             residues_str, n_residues, round(resultant, 3), volume,
                              'Yes' if is_pocket else 'No', *np.round(frag_center, 3)])
 
         if is_pocket:
@@ -955,7 +1008,7 @@ def search_hydrophobic_pockets(mol, pdb_coords, DF_Active_Site, Distancia_Hidrof
         else pd.DataFrame(columns=_POCKET_SUMMARY_COLS)
     df_detail  = pd.DataFrame(detail_rows, columns=_POCKET_DETAIL_COLS) if detail_rows \
         else pd.DataFrame(columns=_POCKET_DETAIL_COLS)
-    return df_summary, df_detail
+    return df_summary, df_detail, pocket_hulls
 
 
 def scripting_vmd_pockets(df_detail, Prot, chain, Lig, folder):
@@ -1210,6 +1263,7 @@ def analyze_pair(receptor_pdb, Ligand_imput, chain_receptor, cfg):
     vmd_output            = cfg['vmd_output']
     cumulative_output     = cfg['cumulative_output']
     Interaction_Coord_Source = cfg['Interaction_Coord_Source']
+    Volume_Plot           = cfg['Volume_Plot']
     Distances_Hidrogen_Bonds = cfg['Distances_Hidrogen_Bonds']
     Distances_Aromatic    = cfg['Distances_Aromatic']
     Distancia_Hidrofobica = cfg['Distancia_Hidrofobica']
@@ -1271,6 +1325,10 @@ def analyze_pair(receptor_pdb, Ligand_imput, chain_receptor, cfg):
                                            Distancia_Centro_Activo, ligand)
     receptor_points = Coordenadas_interes_receptor(Aceptores_Prot, Dadores_Prot, DF_Active_Site)
 
+    # Volumen del sitio activo completo (envolvente convexa de todos sus átomos),
+    # independiente del volumen por pocket hidrofóbico calculado más abajo.
+    Site_Volume, site_hull = convex_hull_volume(DF_Active_Site[['X', 'Y', 'Z']].values.astype(float))
+
     # ── DataFrame de interacciones ────────────────────────────────
     DF_Interacciones = pd.DataFrame({c: pd.Series(dtype=t) for c, t in [
         ('Pos R', 'int'), ('Res', 'object'), ('Atom', 'object'), ('Dist', 'float64'),
@@ -1303,7 +1361,7 @@ def analyze_pair(receptor_pdb, Ligand_imput, chain_receptor, cfg):
     df_hpho = search_hydrophobic(mol, pdb_coords, DF_Active_Site, Distancia_Hidrofobica)
     df_salt = search_salt_bridges(mol, pdb_coords, DF_Active_Site)
     df_pica = search_pi_cation(DF_Active_Site, aromatic_lig_df)
-    df_pocket_summary, df_pocket_detail = search_hydrophobic_pockets(
+    df_pocket_summary, df_pocket_detail, pocket_hulls = search_hydrophobic_pockets(
         mol, pdb_coords, DF_Active_Site, Distancia_Hidrofobica,
         Pocket_Min_Residues, Pocket_Coverage_Threshold)
     # Frames vacíos (sin matches) no tienen dtypes declarados (columns=_DF_COLS sin data);
@@ -1380,6 +1438,21 @@ def analyze_pair(receptor_pdb, Ligand_imput, chain_receptor, cfg):
 
     df_pocket_summary.to_csv(f'{folder}/Pockets_{receptor}_{ligand}.csv', index=False)
 
+    if Volume_Plot == 'Yes':
+        if site_hull is not None:
+            plot_hull_volume(DF_Active_Site[['X', 'Y', 'Z']].values.astype(float), site_hull,
+                             f'Active site — {Site_Volume:.1f} Å³',
+                             f'{folder}/ActiveSite_{receptor}_{ligand}_volume.png')
+        if not df_pocket_summary.empty:
+            qualifying = df_pocket_summary[df_pocket_summary['Is_Pocket'] == 'Yes']
+            for _, prow in qualifying.iterrows():
+                hull_data = pocket_hulls.get(prow['Pocket'])
+                if hull_data is None:
+                    continue  # volumen no calculable (< 4 puntos o geometría degenerada)
+                points, hull = hull_data
+                plot_hull_volume(points, hull, f"Pocket {prow['Pocket']} — {prow['Volume']:.1f} Å³",
+                                 f"{folder}/Pocket_{prow['Pocket']}_{receptor}_{ligand}_volume.png")
+
     shutil.copy(Ligand_imput, f'{folder}/{Path(Ligand_imput).name}')
     shutil.copy(receptor_pdb, f'{folder}/{Path(receptor_pdb).name}')
 
@@ -1403,6 +1476,7 @@ def analyze_pair(receptor_pdb, Ligand_imput, chain_receptor, cfg):
         dat[f'true_{t}'] = counts_true.get(t, 0)
     dat['pocket_hydrophobic'] = int((df_pocket_summary['Is_Pocket'] == 'Yes').sum()) \
         if not df_pocket_summary.empty else 0
+    dat['ActiveSite_Volume'] = Site_Volume
     pd.DataFrame([dat]).to_csv(f'{folder}/summary.csv', index=False)
 
     pd.DataFrame([{'Receptor': receptor, 'Ligand': ligand,
@@ -1488,7 +1562,7 @@ def main():
         pairs = [(args.receptor_pdb, lig) for lig in args.ligand_input]
 
     # ── Cargar configuración una sola vez ─────────────────────────
-    (ligand_plot, vmd_output, cumulative_output, Interaction_Coord_Source,
+    (ligand_plot, vmd_output, cumulative_output, Interaction_Coord_Source, Volume_Plot,
      Distances_Hidrogen_Bonds, Distances_Aromatic,
      Distancia_Hidrofobica, Distancia_Centro_Activo, Angle_Hidrogen_Bonds_Min,
      Angle_Hidrogen_Bonds_Max, Ring_Planarity_RMSD_Max, Pocket_Min_Residues,
@@ -1500,6 +1574,7 @@ def main():
         'vmd_output':               vmd_output,
         'cumulative_output':        cumulative_output,
         'Interaction_Coord_Source': Interaction_Coord_Source,
+        'Volume_Plot':              Volume_Plot,
         'Distances_Hidrogen_Bonds': Distances_Hidrogen_Bonds,
         'Distances_Aromatic':       Distances_Aromatic,
         'Distancia_Hidrofobica':    Distancia_Hidrofobica,
