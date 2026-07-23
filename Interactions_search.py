@@ -168,6 +168,8 @@ def carga_variables(config_path=None):
         cfg.options.ligand_plot,
         cfg.options.vmd_output,
         cfg.options.cumulative_output,
+        cfg.options.interaction_coord,
+        cfg.options.volume_plot,
         cfg.distancias.Distances_Hidrogen_Bonds,
         cfg.distancias.Distances_Aromatic,
         cfg.distancias.Distances_Hidrofobica,
@@ -1392,7 +1394,8 @@ def main():
         pairs = [(args.receptor_pdb, lig) for lig in args.ligand_input]
 
     # ── Cargar configuración una sola vez ─────────────────────────
-    (ligand_plot, vmd_output, cumulative_output, Distances_Hidrogen_Bonds, Distances_Aromatic,
+    (ligand_plot, vmd_output, cumulative_output, Interaction_Coord_Source, Volume_Plot,
+     Distances_Hidrogen_Bonds, Distances_Aromatic,
      Distancia_Hidrofobica, Distancia_Centro_Activo, Angle_Hidrogen_Bonds_Min,
      Angle_Hidrogen_Bonds_Max, Ring_Planarity_RMSD_Max, Pocket_Min_Residues,
      Pocket_Coverage_Threshold, Aceptores_Prot, Dadores_Prot,
@@ -1402,6 +1405,8 @@ def main():
         'ligand_plot':              ligand_plot,
         'vmd_output':               vmd_output,
         'cumulative_output':        cumulative_output,
+        'Interaction_Coord_Source': Interaction_Coord_Source,
+        'Volume_Plot':              Volume_Plot,
         'Distances_Hidrogen_Bonds': Distances_Hidrogen_Bonds,
         'Distances_Aromatic':       Distances_Aromatic,
         'Distancia_Hidrofobica':    Distancia_Hidrofobica,

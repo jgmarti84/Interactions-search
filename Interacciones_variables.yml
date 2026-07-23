@@ -2,6 +2,8 @@ options:
   ligand_plot: 'Yes'
   vmd_output: 'Yes'
   cumulative_output: 'Yes'   # agrega cada par receptor-ligando a Interactions_close.csv y CM_all.csv
+  interaction_coord: 'center'  # coordenada X,Y,Z añadida a los CSV de interacciones: 'receptor', 'ligand' o 'center' (punto medio)
+  volume_plot: 'Yes'           # genera PNG de dispersión 3D (envolvente convexa) del sitio activo y pockets
 
 distancias:
   Distances_Hidrogen_Bonds: 3.2
