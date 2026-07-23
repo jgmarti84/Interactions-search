@@ -205,6 +205,7 @@ options:
   ligand_plot: 'Yes'         # generates PNG images of ligand acceptors, donors and rings
   vmd_output:  'Yes'         # generates TCL script for VMD visualisation
   cumulative_output: 'Yes'   # appends each pair to Interactions_close.csv / CM_all.csv
+  interaction_coord: 'center'  # X,Y,Z column added to Interaction_*.csv: 'receptor', 'ligand' or 'center' (midpoint)
 
 distancias:
   Distances_Hidrogen_Bonds: 3.2   # Å — H-bond threshold
@@ -312,8 +313,9 @@ pocket criteria (e.g. only 2 residues), or vice versa.
 | `N_Residues` | Distinct contacting residue count |
 | `Coverage_R` | Spatial coverage score, 0–1 (see above); lower = more enclosing |
 | `Is_Pocket` | `Yes` / `No` — whether both criteria (`N_Residues` and `Coverage_R`) are met |
+| `X`, `Y`, `Z` | Centroid of the ligand fragment atoms actually in contact (the same centroid `Coverage_R` is computed around) |
 
-Interaction CSV columns:
+Interaction CSV columns (same schema in `_all`/`_threshold`/`_true`):
 
 | Column | Description |
 |---|---|
@@ -324,6 +326,7 @@ Interaction CSV columns:
 | `Lig` | Ligand atom or ring involved |
 | `Type` | Type: `acceptor`, `donor`, `aromatic`, `hydrophobic`, `salt_bridge`, `pi_cation` |
 | `Angle` | Validation angle in degrees |
+| `X`, `Y`, `Z` | 3D coordinate of the interaction, selected by `options.interaction_coord`: `'receptor'` (receptor atom or aromatic-ring centroid; mean of the collapsed atoms for `hydrophobic`), `'ligand'` (ligand atom or ring centroid), or `'center'` (midpoint between both, default). `NaN` if the atom/ring couldn't be resolved |
 | `Interaction` | `Yes` / `No` — whether distance and angle criteria are met |
 
 ### VMD scripts (if `vmd_output: 'Yes'`)

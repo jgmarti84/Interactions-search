@@ -2,6 +2,8 @@ options:
   ligand_plot: 'Yes'
   vmd_output: 'Yes'
   cumulative_output: 'Yes'   # agrega cada par receptor-ligando a Interactions_close.csv y CM_all.csv
+  interaction_coord: 'center'   # coordenada X,Y,Z que se agrega a los CSV de interacciones
+                                 # (_all/_threshold/_true): 'receptor', 'ligand' o 'center' (punto medio)
 
 distancias:
   Distances_Hidrogen_Bonds: 3.2
