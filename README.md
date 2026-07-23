@@ -13,14 +13,27 @@ Detects and classifies non-covalent interactions between a ligand and a protein 
 
 ---
 
-## Dependencies
+## Installation
 
+### Dev install (recommended)
+
+```bash
+git clone <repo-url>
+cd Interactions-search
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+pip install -e ".[dev]"
 ```
-biopython
-rdkit
-pandas
-numpy
-pyyaml
+
+Installs the package in editable mode plus dev tools (pytest, ruff, mypy).
+
+### Script-only (no package install)
+
+If you only need to run the script without the package:
+
+```bash
+pip install biopython rdkit pandas numpy pyyaml
+python Interactions_search.py -r receptor.pdb -l ligand.pdb -c A
 ```
 
 ---
@@ -75,6 +88,21 @@ python Interactions_search.py -x complex.pdb -c A -f TF3 7FW -n TF3
 | `-c / --chain_receptor` | Protein chain (e.g. `A`). |
 | `-n / --lig_name` | HETATM name when multiple groups exist in `--complex`. |
 | `-f / --force_ligand` | Residue name(s) to treat as ligand even if stored as `ATOM` instead of `HETATM` in `--complex`. |
+
+---
+
+## Python API
+
+> **Status: in development.** Programmatic access is being extracted into the `interactions_search` package. The script interface above is the stable way to run analyses for now.
+
+Once available, the intended usage will be:
+
+```python
+from interactions_search import analyze_pair, load_config
+
+cfg = load_config("Interacciones_variables.yml")
+analyze_pair("receptor.pdb", "ligand.pdb", chain="A", cfg=cfg)
+```
 
 ---
 
@@ -361,9 +389,33 @@ In batch mode each pair generates its own independent folder.
 
 ---
 
+## Development
+
+```bash
+# Run tests
+pytest tests/ -v
+
+# Lint
+ruff check .
+
+# Type-check (once annotations are added)
+mypy src/
+```
+
+Smoke tests in [`tests/test_smoke.py`](tests/test_smoke.py) run the full pipeline against minimal fixture PDBs in [`tests/fixtures/`](tests/fixtures/) and verify exit code, output folder, CSV columns, and that all validated rows have `Interaction == 'Yes'`.
+
+---
+
 ## Notes
 
 - The script should be run from the directory containing the PDB files, or use absolute paths.
 - For batch analysis of multiple ligands, the script can be called in a shell loop; with `cumulative_output: 'Yes'`, `Interactions_close.csv` and `CM_all.csv` are appended automatically across runs (set to `'No'` to disable).
 - Non-standard residues not listed in `acceptors` / `donors` in the YAML are silently skipped.
 - Aromatic rings in the ligand must contain more than 5 atoms and be planar (RMSD to the best-fit plane ≤ `Ring_Planarity_RMSD_Max`) to be considered. Planarity, not RDKit's aromaticity flag, is used because `Chem.MolFromPDBFile` does not reliably perceive aromaticity from PDB files without explicit bond orders.
+
+---
+
+## See also
+
+- [`docs/BASELINE.md`](docs/BASELINE.md) — full behavioral snapshot: pipeline details, config keys, CSV schema, regression check command
+- [`Interacciones_variables.yml`](Interacciones_variables.yml) — live configuration file with all thresholds and per-residue donor/acceptor tables
