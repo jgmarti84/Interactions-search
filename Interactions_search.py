@@ -860,7 +860,7 @@ def search_hydrophobic(mol, pdb_coords, DF_Active_Site, Distancia_Hidrofobica):
 # ──────────────────────────────────────────────────────────────────────────────
 
 _POCKET_SUMMARY_COLS = ['Pocket', 'Fragment_Atoms', 'N_Ligand_Atoms', 'Residues',
-                        'N_Residues', 'Coverage_R', 'Volume', 'Is_Pocket', 'X', 'Y', 'Z']
+                        'N_Residues', 'Coverage_R', 'Volume_A3', 'Is_Pocket', 'X', 'Y', 'Z']
 _POCKET_DETAIL_COLS  = ['Pocket', 'Pos R', 'Res', 'Atom', 'Lig_Atom', 'Lig_Serial', 'Dist']
 _POCKET_COLORIDS     = [3, 9, 11, 4, 7, 10, 14, 17]  # orange, pink, purple2, yellow, green, cyan, ...
 
@@ -911,7 +911,7 @@ def search_hydrophobic_pockets(mol, pdb_coords, DF_Active_Site, Distancia_Hidrof
     Retorna (df_summary, df_detail, pocket_hulls): df_summary tiene una fila por
     fragmento candidato (pase o no el filtro), con X/Y/Z = centroide de los
     átomos del ligando efectivamente en contacto (frag_center, usado también
-    para Coverage_R) y Volume = volumen (Å³) de la envolvente convexa
+    para Coverage_R) y Volume_A3 = volumen (Å³) de la envolvente convexa
     (ConvexHull) de todos los átomos de los residuos que contactan el pocket
     (NaN si hay menos de 4 átomos o si son coplanares/degenerados); df_detail
     solo tiene los contactos átomo-residuo de los fragmentos que sí califican
@@ -1450,7 +1450,7 @@ def analyze_pair(receptor_pdb, Ligand_imput, chain_receptor, cfg):
                 if hull_data is None:
                     continue  # volumen no calculable (< 4 puntos o geometría degenerada)
                 points, hull = hull_data
-                plot_hull_volume(points, hull, f"Pocket {prow['Pocket']} — {prow['Volume']:.1f} Å³",
+                plot_hull_volume(points, hull, f"Pocket {prow['Pocket']} — {prow['Volume_A3']:.1f} Å³",
                                  f"{folder}/Pocket_{prow['Pocket']}_{receptor}_{ligand}_volume.png")
 
     shutil.copy(Ligand_imput, f'{folder}/{Path(Ligand_imput).name}')
@@ -1476,7 +1476,7 @@ def analyze_pair(receptor_pdb, Ligand_imput, chain_receptor, cfg):
         dat[f'true_{t}'] = counts_true.get(t, 0)
     dat['pocket_hydrophobic'] = int((df_pocket_summary['Is_Pocket'] == 'Yes').sum()) \
         if not df_pocket_summary.empty else 0
-    dat['ActiveSite_Volume'] = Site_Volume
+    dat['ActiveSite_Volume_A3'] = Site_Volume
     pd.DataFrame([dat]).to_csv(f'{folder}/summary.csv', index=False)
 
     pd.DataFrame([{'Receptor': receptor, 'Ligand': ligand,

@@ -286,11 +286,11 @@ with two independent criteria, both must hold:
    A fragment is marked `Is_Pocket = Yes` only if `n_residues ≥ min_residues` **and**
    `Coverage_R < coverage_threshold` (default 0.5).
 
-**Volume.** For every candidate fragment (pass or fail), `Volume` is the volume (Å³) of the
+**Volume.** For every candidate fragment (pass or fail), `Volume_A3` is the volume (Å³) of the
 convex hull (`scipy.spatial.ConvexHull`) of all atoms belonging to the contacting residues
 (the same atom set `vmd_pockets_*.tcl`'s `Surf` representation selects) — `NaN` if there
 are fewer than 4 atoms or the geometry is degenerate (coplanar points). This is separate
-from the whole active site's volume (`ActiveSite_Volume` in `summary.csv`), which is the
+from the whole active site's volume (`ActiveSite_Volume_A3` in `summary.csv`), which is the
 convex hull of every atom in `DF_Active_Site` (all residues within `centroid_distance` Å of
 the ligand), independent of hydrophobic pockets. If `options.volume_plot: 'Yes'`, a 3D
 scatter PNG is generated for the active site and for each qualifying pocket
@@ -327,7 +327,7 @@ pocket criteria (e.g. only 2 residues), or vice versa.
 | `Residues` | Contacting receptor residues, e.g. `LEU63,VAL67,TYR129` |
 | `N_Residues` | Distinct contacting residue count |
 | `Coverage_R` | Spatial coverage score, 0–1 (see above); lower = more enclosing |
-| `Volume` | Convex-hull volume (Å³) of the contacting residues' atoms (see "Hydrophobic Pockets" above); `NaN` if not computable |
+| `Volume_A3` | Convex-hull volume (Å³) of the contacting residues' atoms (see "Hydrophobic Pockets" above); `NaN` if not computable |
 | `Is_Pocket` | `Yes` / `No` — whether both criteria (`N_Residues` and `Coverage_R`) are met |
 | `X`, `Y`, `Z` | Centroid of the ligand fragment atoms actually in contact (the same centroid `Coverage_R` is computed around) |
 
