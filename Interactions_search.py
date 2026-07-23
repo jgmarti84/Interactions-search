@@ -162,8 +162,8 @@ def center_of_mass(entity, geometric=False):
         return [sum(coord_list)/sum(masses) for coord_list in w_pos]
 
 
-def carga_variables():
-    cfg = load_config()
+def carga_variables(config_path=None):
+    cfg = load_config(config_path)
     return (
         cfg.options.ligand_plot,
         cfg.options.vmd_output,
@@ -1350,6 +1350,9 @@ def main():
     parser.add_argument('-f', '--force_ligand', nargs='+', default=None,
                         help='Resname(s) a tratar como ligando aunque figuren como ATOM '
                              'en vez de HETATM en el PDB complejo (ej: -f TF3 7FW).')
+    parser.add_argument('--config', default=None, metavar='CONFIG.yml',
+                        help='Ruta al archivo YAML de configuración '
+                             '(por defecto: Interacciones_variables.yml en la raíz del proyecto).')
 
     args = parser.parse_args()
 
@@ -1393,7 +1396,7 @@ def main():
      Distancia_Hidrofobica, Distancia_Centro_Activo, Angle_Hidrogen_Bonds_Min,
      Angle_Hidrogen_Bonds_Max, Ring_Planarity_RMSD_Max, Pocket_Min_Residues,
      Pocket_Coverage_Threshold, Aceptores_Prot, Dadores_Prot,
-     Aceptot_antecedent, Special_case) = carga_variables()
+     Aceptot_antecedent, Special_case) = carga_variables(args.config)
 
     cfg = {
         'ligand_plot':              ligand_plot,
