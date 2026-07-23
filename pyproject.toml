@@ -25,6 +25,9 @@ dev = [
   "build>=1.2",
 ]
 
+[project.scripts]
+interactions-search = "interactions_search:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
