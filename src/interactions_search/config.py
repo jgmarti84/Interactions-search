@@ -34,6 +34,8 @@ class Options(BaseModel):
         description="Coordinate added to interaction CSVs: 'receptor', 'ligand', or 'center' (midpoint)",
     )
     volume_plot: YesNo = Field(default="Yes", description="Generate 3D convex-hull volume PNG for active site and pockets")
+    bias: YesNo = Field(default="No", description="Generate GOLD bias probe file (.bpf) and dummy-atom PDB for VMD")
+    bias_validated_only: YesNo = Field(default="No", description="Restrict bias points to validated interactions only (Interaction == 'Yes')")
 
 
 class Distances(BaseModel):
@@ -67,6 +69,7 @@ class Aromaticity(BaseModel):
 class Pockets(BaseModel):
     min_residues: int = Field(default=3, gt=0, description="Minimum distinct residues contacting a ligand fragment to qualify as a pocket")
     coverage_threshold: float = Field(default=0.5, ge=0, le=1, description="Maximum coverage R (0=fully surrounded, 1=one-sided) to qualify as a pocket")
+    density_radius: float = Field(default=5.0, gt=0, description="Neighbourhood radius (Å) for hydrophobic density score (fpocket-style)")
 
 
 class InteractionConfig(BaseModel):

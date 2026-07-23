@@ -175,6 +175,8 @@ def carga_variables(config_path=None):
         cfg.options.cumulative_output,
         cfg.options.interaction_coord,
         cfg.options.volume_plot,
+        cfg.options.bias,
+        cfg.options.bias_validated_only,
         cfg.distancias.Distances_Hidrogen_Bonds,
         cfg.distancias.Distances_Aromatic,
         cfg.distancias.Distances_Hidrofobica,
@@ -184,6 +186,7 @@ def carga_variables(config_path=None):
         cfg.aromaticidad.Ring_Planarity_RMSD_Max,
         cfg.pockets.min_residues,
         cfg.pockets.coverage_threshold,
+        cfg.pockets.density_radius,
         cfg.acceptors,
         cfg.donors,
         cfg.acceptors_antecedent,
@@ -1788,7 +1791,7 @@ def main():
      Bias_Validated_Only, Distances_Hidrogen_Bonds, Distances_Aromatic,
      Distancia_Hidrofobica, Distancia_Centro_Activo, Angle_Hidrogen_Bonds_Min,
      Angle_Hidrogen_Bonds_Max, Ring_Planarity_RMSD_Max, Pocket_Min_Residues,
-     Pocket_Coverage_Threshold, Aceptores_Prot, Dadores_Prot,
+     Pocket_Coverage_Threshold, Pocket_Density_Radius, Aceptores_Prot, Dadores_Prot,
      Aceptot_antecedent, Special_case) = carga_variables(args.config)
 
     cfg = {
